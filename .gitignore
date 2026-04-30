@@ -15,10 +15,15 @@ results/
 # App-state persisted by the UI launcher
 .app_state.json
 audio/
+build/
+music/
+scene/
+temp/
 # Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/*
 frontend/
 # OS junk
 .DS_Store

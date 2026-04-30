@@ -19,6 +19,6 @@ audio/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
-
+frontend/
 # OS junk
 .DS_Store

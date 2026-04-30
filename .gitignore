@@ -26,3 +26,5 @@ frontend/*
 frontend/
 # OS junk
 .DS_Store
+
+config.yaml

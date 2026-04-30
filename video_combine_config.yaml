@@ -1,0 +1,105 @@
+# =============================================================================
+# Video Combine — Configuration
+# =============================================================================
+# Build a video from a folder of images + scenes.json timestamps + audio.
+#
+# Run with:
+#   python -m video_combine.combine --config video_combine_config.yaml
+#
+# Any value here can be overridden on the command line, e.g.:
+#   python -m video_combine.combine --config video_combine_config.yaml --fps 60
+#   python -m video_combine.combine --config video_combine_config.yaml --no-audio
+#
+# Relative paths are resolved against the project root (the folder that
+# contains this file).
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Input — images folder + scenes.json
+# -----------------------------------------------------------------------------
+input:
+  # Folder containing images. Files must start with a numeric prefix (e.g.
+  # 01_intro.png, 02_city.jpg, ...) so scene mapping stays predictable.
+  images: results_vietnam/images
+
+  # Scenes file with start/end timestamps (output of generate_scenes.py).
+  scenes: results_vietnam/scenes.json
+
+  # Optional: raw STT output JSON (results/out.json) used to render subtitles
+  # from ORIGINAL segment timings (not merged scene timings).
+  subtitles_json: results_vietnam/out.json
+
+
+# -----------------------------------------------------------------------------
+# Audio — narration + optional background music tracks
+# -----------------------------------------------------------------------------
+audio:
+  # Main narration track. Muxed over the full video.
+  narration: audio/vietnam_audio.mp3
+
+  # Set to false to render a silent video (equivalent to CLI --no-audio).
+  enabled: true
+
+  # Linear volume multiplier for the narration (1.0 = unchanged, 0.5 = half).
+  narration_volume: 1.0
+
+
+# -----------------------------------------------------------------------------
+# Background music (optional) — layered on top of the narration
+# -----------------------------------------------------------------------------
+# Each entry is a track placed on the video timeline. Fields:
+#   file     (required) path to an audio file (mp3/wav/m4a/ogg/...)
+#   start    (seconds)  when on the video timeline the track starts (default 0)
+#   end      (seconds)  when to stop; omit to play to the natural end
+#   duration (seconds)  alternative to `end`; end = start + duration
+#   offset   (seconds)  skip this much from the head of the source file
+#   volume   (float)    linear volume multiplier (e.g. 0.3 = 30%)
+#
+# Examples (uncomment to use):
+music: []
+# music:
+#   - file: music/intro.mp3
+#     start: 0
+#     end: 12
+#     volume: 0.3
+#   - file: music/bed.mp3
+#     start: 12
+#     volume: 0.15         # plays from 12s to end of video
+#   - file: music/outro.mp3
+#     start: 55
+#     duration: 15
+#     offset: 2             # skip the first 2s of the source file
+#     volume: 0.25
+
+
+# -----------------------------------------------------------------------------
+# Video encoding (optional — sensible defaults; omit this block entirely if
+# you just want "paste image into scene with Ken Burns and call it done")
+# -----------------------------------------------------------------------------
+# - resolution: auto-detected from the first image when omitted, so your
+#   output matches the image size. Set it explicitly only if you want all
+#   images letterboxed/scaled into a specific canvas (e.g. 1920x1080).
+# - fps: defaults to 30. It's required because the Ken Burns zoom/pan is
+#   animated — <24 starts to look choppy, >30 just makes a bigger file.
+# - threads / preset: encoder knobs.
+#
+video:
+  # Keep resolution omitted so it auto-matches your first image.
+  fps: 24
+  threads: 16              # ffmpeg encoder threads
+  preset: ultrafast         # fastest encode speed, larger file size
+  subtitle_font_size: 35
+  subtitle_bottom_margin: 30
+  subtitle_max_lines: -1
+  subtitle_stroke_width: 3
+  subtitle_max_chars: 30
+  subtitle_split_by_space: true
+  subtitle_black_background: true
+
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+# Final mp4 file path.
+output: results_vietnam/video_ffmpeg.mp4

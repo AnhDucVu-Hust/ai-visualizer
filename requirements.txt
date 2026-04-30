@@ -1,0 +1,33 @@
+# Core STT
+faster-whisper>=1.1.0
+transformers>=4.46.0
+
+# Data models
+pydantic>=2.0.0
+
+# Environment variable loading
+python-dotenv>=1.0.0
+
+# YAML config file support
+pyyaml>=6.0
+
+# Video combine (image sequence + audio -> mp4 with Ken Burns)
+moviepy>=2.2.1
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Fast ffmpeg-based combiner (video_combine/ffmpeg_combine.py).
+# Requires the ffmpeg CLI with libass support to be installed separately:
+#   macOS:    brew install ffmpeg
+#   Debian:   apt install ffmpeg
+ffmpeg-python>=0.2.0
+
+# Backend API for the React desktop app
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# Optional: GPU support (uncomment / install separately)
+# torch>=2.0.0          # for device auto-detection
+# nvidia-cublas-cu12    # cuBLAS for CUDA 12
+# nvidia-cudnn-cu12==9.*  # cuDNN 9 for CUDA 12

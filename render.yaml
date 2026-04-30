@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-visualizer-backend
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

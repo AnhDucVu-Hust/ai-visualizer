@@ -17,7 +17,6 @@ results/
 audio/
 build/
 music/
-scene/
 temp/
 # Frontend
 frontend/node_modules/

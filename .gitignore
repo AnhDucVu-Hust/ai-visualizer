@@ -28,3 +28,6 @@ frontend/
 .DS_Store
 
 config.yaml
+.mp4
+.spec
+build_docker/

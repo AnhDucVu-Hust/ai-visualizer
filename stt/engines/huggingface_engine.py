@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .base import BaseSTTEngine
 from stt.models import Segment, TranscriptionConfig, TranscriptionResult
@@ -64,12 +64,19 @@ class HuggingFaceEngine(BaseSTTEngine):
         self._current_config = None
         self._model_name = "unloaded"
 
-    def transcribe(self, audio_path: str | Path, config: TranscriptionConfig) -> TranscriptionResult:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        config: TranscriptionConfig,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> TranscriptionResult:
         path = self._validate_audio_path(audio_path)
         if not self.is_loaded or not self._is_same_config(config):
             self.load(config)
 
         assert self._pipeline is not None
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Transcription cancelled by user")
         generate_kwargs = {}
         if config.language:
             generate_kwargs["language"] = config.language
@@ -83,6 +90,8 @@ class HuggingFaceEngine(BaseSTTEngine):
             return_language=True,
             generate_kwargs=generate_kwargs,
         )
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Transcription cancelled by user")
 
         segments = self._build_segments(result)
 

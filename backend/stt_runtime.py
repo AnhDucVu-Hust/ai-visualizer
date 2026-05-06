@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Callable, Optional
 
 from config import load_config
 from stt import Transcriber, TranscriptionConfig
@@ -37,11 +38,12 @@ def transcribe_shared(
     engine_name: str,
     audio_path: str | Path,
     config: TranscriptionConfig,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> TranscriptionResult:
     """Run STT via the shared transcriber. Calls are serialized with a lock."""
     transcriber = _resolve_shared_transcriber(engine_name)
     with _TRANSCIBER_LOCK:
-        return transcriber.transcribe(audio_path, config)
+        return transcriber.transcribe(audio_path, config, cancel_check=cancel_check)
 
 
 def preload_default_stt_model() -> None:

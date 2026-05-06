@@ -88,7 +88,7 @@ video:
   # Keep resolution omitted so it auto-matches your first image.
   fps: 24
   threads: 16              # ffmpeg encoder threads
-  preset: ultrafast         # fastest encode speed, larger file size
+  preset: slower         # fastest encode speed, larger file size
   subtitle_font_size: 35
   subtitle_bottom_margin: 30
   subtitle_max_lines: -1

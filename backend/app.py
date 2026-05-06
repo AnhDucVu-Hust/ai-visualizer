@@ -7,6 +7,7 @@ import json
 import shutil
 import tempfile
 import zipfile
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,7 +33,7 @@ _TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 _MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 _PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
-_UPLOAD_JOB_TTL_SECONDS = int(os.getenv("UPLOAD_JOB_TTL_SECONDS", "900"))
+_UPLOAD_JOB_TTL_SECONDS = int(os.getenv("UPLOAD_JOB_TTL_SECONDS", "1200"))
 _VIDEO_JOB_TTL_SECONDS = int(os.getenv("VIDEO_JOB_TTL_SECONDS", str(_UPLOAD_JOB_TTL_SECONDS)))
 
 app = FastAPI(title="AI Visualizer Studio", version="0.1.0")
@@ -109,6 +110,16 @@ def _build_prompts_bundle(job_id: str, result: Dict[str, Any]) -> Path:
     return bundle_path
 
 
+def _schedule_upload_cleanup(path: Path) -> None:
+    """Delete a standalone uploaded file after the upload TTL window."""
+    registry.schedule_cleanup(
+        job_id=f"upload_{uuid.uuid4().hex}",
+        delay_seconds=_UPLOAD_JOB_TTL_SECONDS,
+        paths=_safe_cleanup_paths(path),
+        delete_job=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # State endpoints
 # ---------------------------------------------------------------------------
@@ -156,6 +167,7 @@ def _save_upload(file: UploadFile, dest_dir: Path) -> Path:
 @app.post("/api/upload/audio")
 def upload_audio(file: UploadFile = File(...)) -> Dict[str, str]:
     dest = _save_upload(file, _AUDIO_DIR)
+    _schedule_upload_cleanup(dest)
     save_state({"last_audio_path": str(dest)})
     return {"path": str(dest), "name": dest.name}
 
@@ -163,6 +175,7 @@ def upload_audio(file: UploadFile = File(...)) -> Dict[str, str]:
 @app.post("/api/upload/music")
 def upload_music(file: UploadFile = File(...)) -> Dict[str, str]:
     dest = _save_upload(file, _MUSIC_DIR)
+    _schedule_upload_cleanup(dest)
     return {"path": str(dest), "name": dest.name}
 
 

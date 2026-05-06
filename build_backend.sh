@@ -22,9 +22,9 @@ python -m PyInstaller run_app.py \
   --collect-submodules video_combine
 
 #echo "🐳 Building Docker..."
-#docker build -t my-secure-app .
+#docker build -t ai-visualizer-backend .
 
 #echo "📦 Exporting..."
-#docker save my-secure-app > my-secure-app.tar
+#docker save ai-visualizer-backend > ai-visualizer-backend.tar
 
-#echo "✅ Done!"
+echo "✅ Done!"

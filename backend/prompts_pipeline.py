@@ -95,6 +95,7 @@ def _run_transcription(cfg: PipelineConfig, job: Job) -> TranscriptionResult:
         engine_name=cfg.stt_engine,
         audio_path=cfg.audio,
         config=t_cfg,
+        cancel_check=job.is_cancel_requested,
     )
 
 

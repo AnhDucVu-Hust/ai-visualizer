@@ -29,13 +29,16 @@ Uses `ffmpeg-python` — https://github.com/kkroening/ffmpeg-python
 from __future__ import annotations
 
 import argparse
+import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Callable, Iterable
 import time
+import shutil
 import ffmpeg
 
 from .combine import (
@@ -412,11 +415,52 @@ def _escape_subtitles_path(path: Path) -> str:
     return s
 
 
-def _ffmpeg_has_filter(filter_name: str) -> bool:
+def _resolve_ffmpeg_binaries() -> tuple[str, str]:
+    """Resolve ffmpeg/ffprobe executables across dev and bundled builds.
+
+    Resolution order:
+      1) Explicit env vars (FFMPEG_BINARY / FFPROBE_BINARY)
+      2) Executables available on PATH
+      3) imageio_ffmpeg bundled binary (and sibling ffprobe if present)
+      4) Fallback names (ffmpeg / ffprobe)
+    """
+    ffmpeg_cmd = (
+        os.getenv("FFMPEG_BINARY")
+        or shutil.which("ffmpeg")
+        or "ffmpeg"
+    )
+    ffprobe_cmd = (
+        os.getenv("FFPROBE_BINARY")
+        or shutil.which("ffprobe")
+        or "ffprobe"
+    )
+
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        imageio_ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # pragma: no cover - optional dependency/runtime
+        imageio_ffmpeg_exe = None
+
+    if imageio_ffmpeg_exe:
+        ffmpeg_exe = Path(imageio_ffmpeg_exe)
+        if not Path(ffmpeg_cmd).is_file() and shutil.which(ffmpeg_cmd) is None:
+            ffmpeg_cmd = str(ffmpeg_exe)
+
+        suffix = ".exe" if ffmpeg_exe.suffix.lower() == ".exe" else ""
+        ffprobe_candidate = ffmpeg_exe.with_name(f"ffprobe{suffix}")
+        if ffprobe_candidate.is_file():
+            if not Path(ffprobe_cmd).is_file() and shutil.which(ffprobe_cmd) is None:
+                ffprobe_cmd = str(ffprobe_candidate)
+
+    return ffmpeg_cmd, ffprobe_cmd
+
+
+def _ffmpeg_has_filter(filter_name: str, ffmpeg_cmd: str = "ffmpeg") -> bool:
     """Return True if the local ffmpeg binary exposes ``filter_name``."""
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-filters"],
+            [ffmpeg_cmd, "-hide_banner", "-filters"],
             capture_output=True,
             text=True,
             check=False,
@@ -537,6 +581,7 @@ def build_video(
     """Build the final video with a single ffmpeg invocation."""
     music_specs = music_specs or []
     music_base_dir = music_base_dir or output_path.parent
+    ffmpeg_cmd, ffprobe_cmd = _resolve_ffmpeg_binaries()
 
     n = min(len(images), len(scenes))
     if len(images) != len(scenes):
@@ -606,7 +651,7 @@ def build_video(
     final_duration = total_duration
     if audio_path is not None:
         try:
-            probe = ffmpeg.probe(str(audio_path))
+            probe = ffmpeg.probe(str(audio_path), cmd=ffprobe_cmd)
             audio_duration = float(probe["format"]["duration"])
             if audio_duration < total_duration:
                 print(
@@ -614,13 +659,13 @@ def build_video(
                     f"({total_duration:.2f}s); trimming output to {audio_duration:.2f}s."
                 )
                 final_duration = audio_duration
-        except ffmpeg.Error as exc:  # noqa: PERF203
+        except (ffmpeg.Error, FileNotFoundError, OSError) as exc:  # noqa: PERF203
             print(f"[warn] ffprobe failed on {audio_path}: {exc}", file=sys.stderr)
 
     # Burn-in subtitles via libass (ASS file written to a temp dir).
     tmp_dir: tempfile.TemporaryDirectory | None = None
     if subtitle_segments:
-        if not _ffmpeg_has_filter("subtitles"):
+        if not _ffmpeg_has_filter("subtitles", ffmpeg_cmd=ffmpeg_cmd):
             raise RuntimeError(
                 "Your ffmpeg build does not include the 'subtitles' filter "
                 "(libass missing). Install/reinstall ffmpeg with libass support, "
@@ -688,13 +733,48 @@ def build_video(
         f"({final_duration:.1f}s @ {fps}fps, {resolution[0]}x{resolution[1]})"
     )
 
+    progress_time_re = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
     try:
         if dry_run:
             print("[dry-run] Skipping ffmpeg execution.")
         else:
-            out.run()
+            process = out.run_async(cmd=ffmpeg_cmd, pipe_stdout=True, pipe_stderr=True)
+            cancelled = False
+            latest_done_seconds = 0.0
+            while True:
+                if cancel_check is not None and cancel_check():
+                    cancelled = True
+                    process.terminate()
+                    break
+
+                line = process.stderr.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    continue
+
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                match = progress_time_re.search(text)
+                if match and progress_callback is not None:
+                    hours = int(match.group(1))
+                    minutes = int(match.group(2))
+                    seconds = float(match.group(3))
+                    latest_done_seconds = (hours * 3600) + (minutes * 60) + seconds
+                    progress_callback(min(latest_done_seconds, final_duration), max(final_duration, 0.001))
+
+            return_code = process.wait()
+            if cancelled:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                raise RuntimeError("Render cancelled.")
+            if return_code != 0:
+                raise ffmpeg.Error("ffmpeg", b"", b"ffmpeg process failed")
+
             if progress_callback is not None:
-                progress_callback(final_duration, max(final_duration, 0.001))
+                progress_callback(max(latest_done_seconds, final_duration), max(final_duration, 0.001))
     finally:
         if tmp_dir is not None:
             tmp_dir.cleanup()
@@ -754,7 +834,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument("--music-config", type=Path, default=None)
     parser.add_argument("--threads", type=int, default=4)
-    parser.add_argument("--preset", default="medium", help="libx264 preset (ultrafast..veryslow).")
+    parser.add_argument("--preset", default="slower", help="libx264 preset (ultrafast..veryslow).")
     parser.add_argument("--crf", type=int, default=20, help="libx264 CRF (lower = better quality, bigger file).")
     parser.add_argument("--subtitle-font-size", type=int, default=44)
     parser.add_argument("--subtitle-bottom-margin", type=int, default=72)

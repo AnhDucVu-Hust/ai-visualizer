@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from .base import BaseSTTEngine
 from stt.models import (
@@ -132,6 +132,7 @@ class FasterWhisperEngine(BaseSTTEngine):
         self,
         audio_path: str | Path,
         config: TranscriptionConfig,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> TranscriptionResult:
         """
         Transcribe *audio_path* and return a populated TranscriptionResult.
@@ -156,8 +157,14 @@ class FasterWhisperEngine(BaseSTTEngine):
         )
 
         segments_raw, info = self._run_inference(path, config)
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Transcription cancelled by user")
 
-        segments = self._build_segments(segments_raw, config.word_timestamps)
+        segments = self._build_segments(
+            segments_raw,
+            config.word_timestamps,
+            cancel_check=cancel_check,
+        )
 
         return TranscriptionResult(
             audio_path=str(path),
@@ -208,11 +215,17 @@ class FasterWhisperEngine(BaseSTTEngine):
         return segments_raw, info
 
     @staticmethod
-    def _build_segments(segments_raw, word_timestamps_enabled: bool) -> list[Segment]:
+    def _build_segments(
+        segments_raw,
+        word_timestamps_enabled: bool,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> list[Segment]:
         """Convert faster-whisper namedtuples to our Pydantic Segment models."""
         segments: list[Segment] = []
 
         for idx, seg in enumerate(segments_raw):
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("Transcription cancelled by user")
             words: list[WordTimestamp] = []
             if word_timestamps_enabled and seg.words:
                 for w in seg.words:

@@ -15,7 +15,7 @@ from __future__ import annotations
 import abc
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from stt.models import TranscriptionConfig, TranscriptionResult
@@ -83,6 +83,7 @@ class BaseSTTEngine(abc.ABC):
         self,
         audio_path: str | Path,
         config: "TranscriptionConfig",
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> "TranscriptionResult":
         """
         Transcribe *audio_path* according to *config*.
@@ -95,6 +96,10 @@ class BaseSTTEngine(abc.ABC):
         config:
             Engine-agnostic configuration.  Engines silently ignore any
             fields they do not support.
+        cancel_check:
+            Optional callback returning True when the caller requested
+            cancellation. Engines should check this cooperatively and
+            abort as soon as practical.
 
         Returns
         -------

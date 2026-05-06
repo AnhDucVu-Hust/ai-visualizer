@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Type
+from typing import Callable, Dict, Optional, Type
 
 from .engines.base import BaseSTTEngine
 from .engines.faster_whisper_engine import FasterWhisperEngine
@@ -99,6 +99,7 @@ class Transcriber:
         self,
         audio_path: str | Path,
         config: Optional[TranscriptionConfig] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> TranscriptionResult:
         """
         Transcribe *audio_path* and return a :class:`TranscriptionResult`.
@@ -108,7 +109,7 @@ class Transcriber:
         if config is None:
             config = TranscriptionConfig()
 
-        return self._engine.transcribe(audio_path, config)
+        return self._engine.transcribe(audio_path, config, cancel_check=cancel_check)
 
     def unload(self) -> None:
         """Release model weights held by the underlying engine."""

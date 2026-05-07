@@ -53,6 +53,7 @@ def _load_cfg(
     min_duration: float,
     max_duration: float,
     output_dir: Path,
+    global_style: Optional[str] = None,
 ) -> PipelineConfig:
     overrides: Dict[str, Any] = {
         "audio": str(audio_path),
@@ -60,6 +61,7 @@ def _load_cfg(
         "min_duration": float(min_duration),
         "max_duration": float(max_duration),
         "output_dir": str(output_dir),
+        "global_style": global_style.strip() if isinstance(global_style, str) else "",
     }
     yaml_path = _resolve_config_path()
     return load_config(yaml_path=yaml_path, overrides=overrides)
@@ -106,8 +108,9 @@ def run_prompts_pipeline(
     min_duration: float,
     max_duration: float,
     output_dir: Path,
+    global_style: Optional[str] = None,
 ) -> Dict[str, Any]:
-    cfg = _load_cfg(audio_path, min_duration, max_duration, output_dir)
+    cfg = _load_cfg(audio_path, min_duration, max_duration, output_dir, global_style)
     job.raise_if_cancelled()
     cfg.output_path.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +127,7 @@ def run_prompts_pipeline(
         language=cfg.language,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
-        **({"global_style": cfg.global_style} if cfg.global_style else {}),
+        global_style=cfg.global_style or "",
     )
     merged = merge_segments(transcription, scene_cfg)
     job.raise_if_cancelled()

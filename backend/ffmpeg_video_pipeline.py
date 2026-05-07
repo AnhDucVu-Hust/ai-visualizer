@@ -5,10 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from video_combine.combine import collect_images, load_scenes, load_subtitle_segments
+from video_combine.combine import collect_images, load_scenes, load_subtitle_segments, load_yaml_config
 from video_combine.ffmpeg_combine import build_video
 
 from .jobs import Job
+
+
+def _default_preset_from_config() -> str:
+    repo_root = Path(__file__).resolve().parent.parent
+    cfg_path = repo_root / "video_combine_config.yaml"
+    if not cfg_path.is_file():
+        return "medium"
+    try:
+        defaults, _music = load_yaml_config(cfg_path)
+    except Exception:  # noqa: BLE001
+        return "medium"
+    preset = defaults.get("preset")
+    return str(preset) if preset else "medium"
 
 
 def run_ffmpeg_video_pipeline(
@@ -22,7 +35,7 @@ def run_ffmpeg_video_pipeline(
     resolution: tuple[int, int] = (1920, 1080),
     fps: int = 30,
     threads: int = 4,
-    preset: str = "medium",
+    preset: Optional[str] = None,
     narration_volume: float = 1.0,
     music_specs: Optional[List[Dict[str, Any]]] = None,
     music_base_dir: Optional[Path] = None,
@@ -46,6 +59,7 @@ def run_ffmpeg_video_pipeline(
     job.append_log(f"Found {len(scenes)} scene entries")
     job.append_log(f"Loaded {len(subtitles or [])} subtitle segments")
 
+    effective_preset = preset or _default_preset_from_config()
     n = min(len(images), len(scenes))
     job.update(total=n, current=0, message=f"Preparing {n} ffmpeg clips…")
     for i in range(n):
@@ -63,7 +77,7 @@ def run_ffmpeg_video_pipeline(
     job.update(current=n, total=n, message="Rendering with ffmpeg…")
     job.append_log(
         f"Render settings: {resolution[0]}x{resolution[1]} @ {fps}fps, "
-        f"preset={preset}, crf={crf}, threads={threads}"
+        f"preset={effective_preset}, crf={crf}, threads={threads}"
     )
     last_render_log = {"sec": -1.0}
 
@@ -90,7 +104,7 @@ def run_ffmpeg_video_pipeline(
         resolution=resolution,
         fps=fps,
         threads=threads,
-        preset=preset,
+        preset=effective_preset,
         crf=crf,
         music_specs=music_specs or [],
         narration_volume=narration_volume,

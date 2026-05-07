@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .jobs import registry
+from .keys_store import activate_key, verify_key
 from .prompts_pipeline import run_prompts_pipeline, scenes_info
 from .state import load_state, save_state
 from .ffmpeg_video_pipeline import run_ffmpeg_video_pipeline
@@ -135,6 +136,10 @@ class StatePatch(BaseModel):
     last_max_duration: Optional[float] = None
 
 
+class ValidateRequest(BaseModel):
+    key: str = Field(..., min_length=1, description="Activation key.")
+
+
 @app.get("/api/state")
 def get_state() -> Dict[str, Any]:
     return load_state()
@@ -143,6 +148,21 @@ def get_state() -> Dict[str, Any]:
 @app.put("/api/state")
 def put_state(patch: StatePatch) -> Dict[str, Any]:
     return save_state({k: v for k, v in patch.model_dump().items() if v is not None})
+
+
+@app.post("/api/activate")
+def activate_api_key(req: ValidateRequest) -> Dict[str, Any]:
+    return activate_key(req.key)
+
+
+@app.post("/api/verify")
+def verify_api_key(req: ValidateRequest) -> Dict[str, Any]:
+    return verify_key(req.key)
+
+
+@app.post("/api/validate")
+def validate_key_legacy(req: ValidateRequest) -> Dict[str, Any]:
+    return activate_key(req.key)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +225,7 @@ class PromptsJobRequest(BaseModel):
     min_duration: float = 7.0
     max_duration: float = 20.0
     output_dir: str = "results"
+    style: str = Field(..., min_length=1, description="Global visual style passed from frontend.")
 
 
 @app.post("/api/prompts/jobs")
@@ -229,6 +250,7 @@ def start_prompts_job(req: PromptsJobRequest) -> Dict[str, Any]:
             min_duration=req.min_duration,
             max_duration=req.max_duration,
             output_dir=output_dir,
+            global_style=req.style.strip(),
         )
         save_state({
             "last_scenes_path": result["scenes_path"],

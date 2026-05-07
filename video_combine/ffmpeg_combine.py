@@ -792,6 +792,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", type=Path, default=None)
     pre_args, _ = pre.parse_known_args(argv_list)
+    if pre_args.config is None:
+        default_cfg = repo_root / "video_combine_config.yaml"
+        if default_cfg.is_file():
+            pre_args.config = default_cfg
 
     config_defaults: dict = {}
     config_music: list[dict] = []

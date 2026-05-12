@@ -29,14 +29,13 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
 
-from .base_client import BaseLLMClient, LLMError
+from .base_client import BaseLLMClient, CancelledError, LLMError, interruptible_sleep
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -160,6 +159,7 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float = 0.7,
         max_tokens: int = 512,
         response_format: Optional[Dict[str, Any]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
         payload: Dict[str, Any] = {
             "model": model,
@@ -181,8 +181,12 @@ class OpenAICompatibleClient(BaseLLMClient):
         total_cycles = self._max_quota_retries + 1
 
         for cycle in range(total_cycles):
+            if cancel_check is not None and cancel_check():
+                raise CancelledError()
             saw_quota_error = False
             for _ in range(len(self._api_keys)):
+                if cancel_check is not None and cancel_check():
+                    raise CancelledError()
                 key = self._current_key
                 try:
                     response = self._http.post(
@@ -191,6 +195,8 @@ class OpenAICompatibleClient(BaseLLMClient):
                         headers={"Authorization": f"Bearer {key}"},
                     )
                 except httpx.HTTPError as exc:
+                    if cancel_check is not None and cancel_check():
+                        raise CancelledError() from exc
                     key_num = self._key_idx + 1
                     logger.error(
                         "OpenAI-compat request transport error on key #%d: %s — rotating to next key.",
@@ -278,7 +284,7 @@ class OpenAICompatibleClient(BaseLLMClient):
                     total_cycles,
                     self._quota_retry_wait,
                 )
-                time.sleep(self._quota_retry_wait)
+                interruptible_sleep(self._quota_retry_wait, cancel_check)
                 self._key_idx = 0
                 continue
 

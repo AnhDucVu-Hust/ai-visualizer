@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from config import load_config
-from stt import Transcriber, TranscriptionConfig
+from stt import GroqEngine, Transcriber, TranscriptionConfig
 from stt.models import ComputeType, Device, TranscriptionResult
 
 logger = logging.getLogger(__name__)
@@ -23,11 +23,27 @@ _SHARED_ENGINE_NAME: str | None = None
 _SHARED_TRANSCRIBER: Transcriber | None = None
 
 
+def _resolve_groq_api_keys() -> list[str]:
+    cfg = load_config(yaml_path=_DEFAULT_CONFIG if _DEFAULT_CONFIG.exists() else None)
+    keys: list[str] = []
+    if cfg.api_keys:
+        keys = [str(k).strip() for k in cfg.api_keys if str(k).strip()]
+    elif cfg.api_key:
+        # Allow comma-separated fallback.
+        keys = [k.strip() for k in str(cfg.api_key).split(",") if k.strip()]
+    if not keys:
+        raise ValueError("No Groq API keys found. Set llm.api_keys (preferred) or llm.api_key in config.yaml.")
+    return keys
+
+
 def _resolve_shared_transcriber(engine_name: str) -> Transcriber:
     global _SHARED_ENGINE_NAME, _SHARED_TRANSCRIBER
     with _RUNTIME_LOCK:
         if _SHARED_TRANSCRIBER is None or _SHARED_ENGINE_NAME != engine_name:
-            _SHARED_TRANSCRIBER = Transcriber(engine_name=engine_name)
+            if engine_name == "groq":
+                _SHARED_TRANSCRIBER = Transcriber(engine=GroqEngine(api_keys=_resolve_groq_api_keys()))
+            else:
+                _SHARED_TRANSCRIBER = Transcriber(engine_name=engine_name)
             _SHARED_ENGINE_NAME = engine_name
             logger.info("Created shared STT transcriber for engine=%s", engine_name)
         return _SHARED_TRANSCRIBER
@@ -40,8 +56,10 @@ def transcribe_shared(
     config: TranscriptionConfig,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> TranscriptionResult:
-    """Run STT via the shared transcriber. Calls are serialized with a lock."""
+    """Run STT via the shared transcriber. Local engines are serialized with a lock."""
     transcriber = _resolve_shared_transcriber(engine_name)
+    if engine_name == "groq":
+        return transcriber.transcribe(audio_path, config, cancel_check=cancel_check)
     with _TRANSCIBER_LOCK:
         return transcriber.transcribe(audio_path, config, cancel_check=cancel_check)
 
@@ -55,6 +73,9 @@ def preload_default_stt_model() -> None:
 
     try:
         cfg = load_config(yaml_path=_DEFAULT_CONFIG if _DEFAULT_CONFIG.exists() else None)
+        if cfg.stt_engine == "groq":
+            logger.info("Skipping STT preload for engine=groq (remote model).")
+            return
         t_cfg = TranscriptionConfig(
             model_size=cfg.stt_model,
             device=Device(cfg.device),

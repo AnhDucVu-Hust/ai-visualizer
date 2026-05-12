@@ -10,7 +10,7 @@ from .models import (
     ScenePipelineResult,
 )
 from .merger import merge_segments
-from .base_client import BaseLLMClient, LLMError
+from .base_client import BaseLLMClient, CancelledError, LLMError, interruptible_sleep
 from .openai_client import (
     OpenAICompatibleClient,
     OpenAIError,
@@ -33,7 +33,9 @@ __all__ = [
     "ScenePipelineResult",
     "merge_segments",
     "BaseLLMClient",
+    "CancelledError",
     "LLMError",
+    "interruptible_sleep",
     "OpenAICompatibleClient",
     "OpenAIError",
     "OpenRouterClient",

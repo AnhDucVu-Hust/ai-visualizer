@@ -32,7 +32,7 @@ class PipelineConfig(BaseModel):
     )
 
     # ── Transcription ──────────────────────────────────────────────────────
-    stt_engine: Literal["whisper", "huggingface"] = Field(
+    stt_engine: Literal["whisper", "huggingface", "groq"] = Field(
         "whisper",
         description="STT backend engine. whisper=faster-whisper, huggingface=Transformers ASR pipeline.",
     )

@@ -109,28 +109,43 @@ def _zoompan_expressions(
 def _movement_expressions(
     variant: int,
     duration_frames: int,
-    pre_scale: int,
-    move_px: int = 110,
+    move_ratio: float = 0.25,
+    movement_zoom: float = 1.25
 ) -> tuple[str, str, str]:
-    """Return ``(z_expr, x_expr, y_expr)`` for movement-only pan variants."""
-    progress = f"(on/{max(duration_frames, 1)})"
-    delta = move_px * pre_scale
+    """Return (z_expr, x_expr, y_expr) for visible directional pan.
+
+    Movement needs zoom > 1.0. Otherwise zoompan has no cropped window
+    to move across, so x/y changes are not visible.
+    """
+    frames = max(duration_frames - 1, 1)
+    progress = f"(on/{frames})"
+
+    z = f"{movement_zoom:.3f}"
+
     center_x = "iw/2-(iw/zoom/2)"
     center_y = "ih/2-(ih/zoom/2)"
-    z = "1.0"
+
+    max_x = f"(iw-iw/zoom)"
+    max_y = f"(ih-ih/zoom)"
+
+    delta_x = f"({max_x}*{move_ratio:.3f})"
+    delta_y = f"({max_y}*{move_ratio:.3f})"
+
     v = variant % 4
+
     if v == 0:  # move right
-        x = f"{center_x}+{progress}*{delta}"
+        x = f"{center_x}-{delta_x}/2+{progress}*{delta_x}"
         y = center_y
     elif v == 1:  # move left
-        x = f"{center_x}-{progress}*{delta}"
+        x = f"{center_x}+{delta_x}/2-{progress}*{delta_x}"
         y = center_y
     elif v == 2:  # move up
         x = center_x
-        y = f"{center_y}-{progress}*{delta}"
+        y = f"{center_y}+{delta_y}/2-{progress}*{delta_y}"
     else:  # move down
         x = center_x
-        y = f"{center_y}+{progress}*{delta}"
+        y = f"{center_y}-{delta_y}/2+{progress}*{delta_y}"
+
     return z, x, y
 
 
@@ -189,7 +204,7 @@ def build_movement_stream(
     """Return an ffmpeg video stream for directional movement (no zoom)."""
     width, height = resolution
     duration_frames = max(1, int(round(duration * fps)))
-    z, x, y = _movement_expressions(variant, duration_frames, pre_scale)
+    z, x, y = _movement_expressions(variant, duration_frames)
 
     stream = ffmpeg.input(str(image_path))
     stream = stream.filter(
@@ -574,6 +589,7 @@ def build_video(
     subtitle_black_background: bool = True,
     subtitle_stroke_width: int = 3,
     pre_scale: int = 4,
+    burn_subtitles: bool = True,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[float, float], None] | None = None,
     dry_run: bool = False,
@@ -646,6 +662,13 @@ def build_video(
     else:
         video = video_streams[0]
 
+    if not burn_subtitles and subtitle_segments:
+        print(
+            f"Subtitles: {len(subtitle_segments)} cues available but "
+            f"burn_subtitles=False (clean video, no ASS burn-in).",
+            file=sys.stderr,
+        )
+
     # Match combine.py behaviour: if narration is shorter than the image
     # sequence, clip the video down to the narration length.
     final_duration = total_duration
@@ -664,7 +687,7 @@ def build_video(
 
     # Burn-in subtitles via libass (ASS file written to a temp dir).
     tmp_dir: tempfile.TemporaryDirectory | None = None
-    if subtitle_segments:
+    if burn_subtitles and subtitle_segments:
         if not _ffmpeg_has_filter("subtitles", ffmpeg_cmd=ffmpeg_cmd):
             raise RuntimeError(
                 "Your ffmpeg build does not include the 'subtitles' filter "
@@ -847,6 +870,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--subtitle-split-by-space", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subtitle-black-background", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subtitle-stroke-width", type=int, default=3)
+    parser.add_argument(
+        "--burn-subtitles",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Burn STT subtitles into the video (libass). --no-burn-subtitles = clean video.",
+    )
     parser.add_argument("--subtitle-font-name", default="Arial")
     parser.add_argument(
         "--pre-scale",
@@ -928,6 +957,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         subtitle_black_background=args.subtitle_black_background,
         subtitle_stroke_width=args.subtitle_stroke_width,
         pre_scale=args.pre_scale,
+        burn_subtitles=args.burn_subtitles,
         dry_run=args.dry_run,
     )
     end_time = time.time()

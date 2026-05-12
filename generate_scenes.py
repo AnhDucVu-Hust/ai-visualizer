@@ -44,6 +44,16 @@ from stt.models import TranscriptionResult
 logger = logging.getLogger(__name__)
 
 
+def _groq_stt_api_keys(cfg: PipelineConfig) -> list[str]:
+    """Groq audio transcription uses the same keys as llm.api_keys / llm.api_key."""
+    keys: list[str] = []
+    if cfg.api_keys:
+        keys = [str(k).strip() for k in cfg.api_keys if str(k).strip()]
+    elif cfg.api_key:
+        keys = [k.strip() for k in str(cfg.api_key).split(",") if k.strip()]
+    return keys
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -386,7 +396,7 @@ def append_prompt_line(path: Path, line: str) -> None:
 
 
 def run_transcription(cfg: PipelineConfig) -> TranscriptionResult:
-    from stt import Transcriber, TranscriptionConfig
+    from stt import GroqEngine, Transcriber, TranscriptionConfig
     from stt.models import Device, ComputeType
 
     config = TranscriptionConfig(
@@ -395,7 +405,16 @@ def run_transcription(cfg: PipelineConfig) -> TranscriptionResult:
         compute_type=ComputeType(cfg.compute_type),
         log_progress=cfg.log_progress,
     )
-    transcriber = Transcriber(engine_name=cfg.stt_engine)
+    if cfg.stt_engine == "groq":
+        groq_keys = _groq_stt_api_keys(cfg)
+        if not groq_keys:
+            raise ValueError(
+                "Groq STT requires llm.api_keys or llm.api_key in config.yaml "
+                "(same Groq API keys as chat)."
+            )
+        transcriber = Transcriber(engine=GroqEngine(api_keys=groq_keys))
+    else:
+        transcriber = Transcriber(engine_name=cfg.stt_engine)
     return transcriber.transcribe(cfg.audio, config)
 
 

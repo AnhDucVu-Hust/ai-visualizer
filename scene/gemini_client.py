@@ -27,14 +27,13 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
 
-from .base_client import BaseLLMClient, LLMError
+from .base_client import BaseLLMClient, CancelledError, LLMError, interruptible_sleep
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -142,6 +141,7 @@ class GeminiClient(BaseLLMClient):
         temperature: float = 0.7,
         max_tokens: int = 512,
         response_format: Optional[Dict[str, Any]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
         """
         Send a request to Gemini and return the model's text response.
@@ -178,13 +178,30 @@ class GeminiClient(BaseLLMClient):
         total_cycles = self._max_quota_retries + 1
 
         for cycle in range(total_cycles):
+            if cancel_check is not None and cancel_check():
+                raise CancelledError()
             for _ in range(len(self._api_keys)):
+                if cancel_check is not None and cancel_check():
+                    raise CancelledError()
                 key = self._current_key
-                response = self._http.post(
-                    endpoint,
-                    json=payload,
-                    params={"key": key},
-                )
+                try:
+                    response = self._http.post(
+                        endpoint,
+                        json=payload,
+                        params={"key": key},
+                    )
+                except httpx.HTTPError as exc:
+                    if cancel_check is not None and cancel_check():
+                        raise CancelledError() from exc
+                    key_num = self._key_idx + 1
+                    logger.error(
+                        "Gemini request transport error on key #%d: %s — rotating to next key.",
+                        key_num,
+                        exc,
+                    )
+                    last_error = LLMError(0, f"Transport error: {exc}")
+                    self._rotate_key()
+                    continue
 
                 if response.status_code == 429:
                     try:
@@ -227,7 +244,7 @@ class GeminiClient(BaseLLMClient):
                     total_cycles,
                     self._quota_retry_wait,
                 )
-                time.sleep(self._quota_retry_wait)
+                interruptible_sleep(self._quota_retry_wait, cancel_check)
                 self._key_idx = 0
 
         raise LLMError(

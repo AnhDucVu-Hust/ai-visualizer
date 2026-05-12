@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional
+from typing import Callable, Optional
 
-from .base_client import BaseLLMClient, LLMError
+from .base_client import BaseLLMClient, CancelledError, LLMError, interruptible_sleep
 from .models import Character, CharacterRoster, SceneConfig
 from stt.models import TranscriptionResult
 
@@ -136,6 +136,7 @@ class CharacterExtractor:
         transcription: TranscriptionResult,
         config: SceneConfig,
         language: Optional[str] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> CharacterRoster:
         """
         Analyse *transcription* and return a :class:`CharacterRoster`.
@@ -165,10 +166,10 @@ class CharacterExtractor:
             lang,
         )
 
-        import time
-
         last_exc: Exception | None = None
         for attempt in range(1, self._retry_attempts + 1):
+            if cancel_check is not None and cancel_check():
+                raise CancelledError()
             try:
                 raw = self._client.chat(
                     messages=messages,
@@ -176,6 +177,7 @@ class CharacterExtractor:
                     temperature=0.3,        # lower temp for factual extraction
                     max_tokens=1024,
                     response_format={"type": "json_object"},
+                    cancel_check=cancel_check,
                 )
                 logger.debug("CharacterExtractor raw response:\n%s", raw)
                 roster = _parse_roster(raw)
@@ -186,6 +188,8 @@ class CharacterExtractor:
                 )
                 return roster
 
+            except CancelledError:
+                raise
             except LLMError as exc:
                 last_exc = exc
                 wait = self._retry_delay * (2 ** (attempt - 1))
@@ -196,7 +200,7 @@ class CharacterExtractor:
                     attempt, self._retry_attempts, exc, wait,
                 )
                 if attempt < self._retry_attempts:
-                    time.sleep(wait)
+                    interruptible_sleep(wait, cancel_check)
             except Exception as exc:
                 last_exc = exc
                 wait = self._retry_delay * (2 ** (attempt - 1))
@@ -205,7 +209,7 @@ class CharacterExtractor:
                     attempt, self._retry_attempts, exc, wait,
                 )
                 if attempt < self._retry_attempts:
-                    time.sleep(wait)
+                    interruptible_sleep(wait, cancel_check)
 
         logger.error("Character extraction gave up after %d attempts.", self._retry_attempts)
         raise RuntimeError("Character extraction failed.") from last_exc

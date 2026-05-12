@@ -27,6 +27,7 @@ from typing import Callable, Dict, Optional, Type
 
 from .engines.base import BaseSTTEngine
 from .engines.faster_whisper_engine import FasterWhisperEngine
+from .engines.groq_engine import GroqEngine
 from .engines.huggingface_engine import HuggingFaceEngine
 from .models import TranscriptionConfig, TranscriptionResult
 
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 _ENGINE_REGISTRY: Dict[str, Type[BaseSTTEngine]] = {
     "faster-whisper": FasterWhisperEngine,
     "whisper": FasterWhisperEngine,
+    "groq": GroqEngine,
     "huggingface": HuggingFaceEngine,
 }
 

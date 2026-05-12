@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from .jobs import registry
 from .keys_store import activate_key, verify_key
 from .prompts_pipeline import run_prompts_pipeline, scenes_info
-from .state import load_state, save_state
+from .state import clear_current_job, load_state, save_state
 from .ffmpeg_video_pipeline import run_ffmpeg_video_pipeline
 from .stt_runtime import preload_default_stt_model
 from .video_pipeline import run_video_pipeline
@@ -70,6 +70,13 @@ def _resolve_path(p: str | None) -> Optional[Path]:
 
 def _job_payload(job) -> Dict[str, Any]:
     return job.to_dict()
+
+
+def _is_same_client(job, client_key: Optional[str]) -> bool:
+    normalized = str(client_key).strip() if client_key is not None else None
+    if normalized == "":
+        normalized = None
+    return job.client_key == normalized
 
 
 def _is_under_temp(path: Path) -> bool:
@@ -141,13 +148,16 @@ class ValidateRequest(BaseModel):
 
 
 @app.get("/api/state")
-def get_state() -> Dict[str, Any]:
-    return load_state()
+def get_state(client_key: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    return load_state(client_key=client_key)
 
 
 @app.put("/api/state")
-def put_state(patch: StatePatch) -> Dict[str, Any]:
-    return save_state({k: v for k, v in patch.model_dump().items() if v is not None})
+def put_state(patch: StatePatch, client_key: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    return save_state(
+        {k: v for k, v in patch.model_dump().items() if v is not None},
+        client_key=client_key,
+    )
 
 
 @app.post("/api/activate")
@@ -226,6 +236,7 @@ class PromptsJobRequest(BaseModel):
     max_duration: float = 20.0
     output_dir: str = "results"
     style: str = Field(..., min_length=1, description="Global visual style passed from frontend.")
+    client_key: Optional[str] = Field(default=None, description="Optional key to isolate per-client UI state.")
 
 
 @app.post("/api/prompts/jobs")
@@ -233,15 +244,19 @@ def start_prompts_job(req: PromptsJobRequest) -> Dict[str, Any]:
     audio_path = _resolve_path(req.audio_path)
     if not audio_path or not audio_path.is_file():
         raise HTTPException(status_code=400, detail=f"Audio file not found: {req.audio_path}")
-    job = registry.create("prompts")
+    job = registry.create("prompts", client_key=req.client_key)
     output_dir = _PROMPTS_DIR / job.id
 
-    save_state({
-        "last_audio_path": str(audio_path),
-        "last_output_dir": str(output_dir),
-        "last_min_duration": req.min_duration,
-        "last_max_duration": req.max_duration,
-    })
+    save_state(
+        {
+            "last_audio_path": str(audio_path),
+            "last_output_dir": str(output_dir),
+            "last_min_duration": req.min_duration,
+            "last_max_duration": req.max_duration,
+            "current_job_id": job.id,
+        },
+        client_key=req.client_key,
+    )
 
     def _target(job):
         result = run_prompts_pipeline(
@@ -252,13 +267,17 @@ def start_prompts_job(req: PromptsJobRequest) -> Dict[str, Any]:
             output_dir=output_dir,
             global_style=req.style.strip(),
         )
-        save_state({
-            "last_scenes_path": result["scenes_path"],
-            "last_output_dir": result["output_dir"],
-        })
+        save_state(
+            {
+                "last_scenes_path": result["scenes_path"],
+                "last_output_dir": result["output_dir"],
+            },
+            client_key=req.client_key,
+        )
         return result
 
     def _on_finished(_job):
+        clear_current_job(req.client_key, job.id)
         registry.schedule_cleanup(
             job_id=job.id,
             delay_seconds=_UPLOAD_JOB_TTL_SECONDS,
@@ -297,9 +316,11 @@ class VideoJobRequest(BaseModel):
     music: List[MusicSpec] = Field(default_factory=list)
     preset: str = "medium"
     threads: int = 4
+    client_key: Optional[str] = None
 
 
 class FfmpegVideoJobRequest(VideoJobRequest):
+    burn_subtitles: bool = True
     crf: int = 20
     subtitle_font_name: str = "Arial"
     subtitle_font_size: int = 44
@@ -417,23 +438,37 @@ def _extract_scene_files(scene_files: List[UploadFile]) -> Path:
     return extract_dir
 
 
-def _detect_scene_root(extract_dir: Path) -> Path:
+def _detect_scene_root(extract_dir: Path, *, require_out_json: bool = True) -> Path:
+    """Locate the folder that contains ``scenes.json`` (and optionally ``out.json``)."""
+
+    def _accepts(scenes_file: Path, out_file: Path) -> bool:
+        if not scenes_file.is_file():
+            return False
+        if require_out_json:
+            return out_file.is_file()
+        return True
+
     direct_scenes = extract_dir / "scenes.json"
     direct_out = extract_dir / "out.json"
-    if direct_scenes.is_file() and direct_out.is_file():
+    if _accepts(direct_scenes, direct_out):
         return extract_dir
 
-    for child in extract_dir.iterdir():
+    for child in sorted(extract_dir.iterdir()):
         if not child.is_dir():
             continue
-        if (child / "scenes.json").is_file() and (child / "out.json").is_file():
+        if _accepts(child / "scenes.json", child / "out.json"):
             return child
 
     raise HTTPException(
         status_code=400,
         detail=(
-            "scene_bundle must contain a folder with both scenes.json and out.json "
-            "(either at zip root or one top-level subfolder)."
+            "scene_bundle must contain scenes.json and out.json "
+            "(at zip root or one top-level subfolder)."
+            if require_out_json
+            else (
+                "scene_bundle must contain scenes.json "
+                "(at zip root or one top-level subfolder)."
+            )
         ),
     )
 
@@ -502,7 +537,7 @@ def _resolve_scene_inputs(
 @app.post("/api/video/jobs")
 def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
     images_dir, scenes_path, subtitles_path = _resolve_scene_inputs(req, require_subtitles=True)
-    job = registry.create("video")
+    job = registry.create("video", client_key=req.client_key)
 
     audio_path = _resolve_path(req.audio_path) if req.include_narration else None
     if req.include_narration and (audio_path is None or not audio_path.is_file()):
@@ -513,12 +548,15 @@ def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
 
     music_specs = _normalize_music_specs(req.music, _ROOT)
 
-    save_state({
-        "last_images_dir": str(images_dir),
-        "last_scenes_path": str(scenes_path),
-        "last_audio_path": str(audio_path) if audio_path else None,
-        "last_video_output": str(output_path),
-    })
+    save_state(
+        {
+            "last_images_dir": str(images_dir),
+            "last_scenes_path": str(scenes_path),
+            "last_audio_path": str(audio_path) if audio_path else None,
+            "last_video_output": str(output_path),
+        },
+        client_key=req.client_key,
+    )
 
     def _target(job):
         return run_video_pipeline(
@@ -531,7 +569,8 @@ def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
             resolution=resolution,
             fps=req.fps,
             threads=req.threads,
-            preset=req.preset,
+            # Backend controls x264 preset via ffmpeg pipeline defaults/config.
+            preset=None,
             narration_volume=req.narration_volume,
             music_specs=music_specs,
             music_base_dir=_ROOT,
@@ -576,6 +615,7 @@ def start_video_job_upload(
     subtitle_split_by_space: bool = Form(True),
     subtitle_black_background: bool = Form(True),
     subtitle_stroke_width: int = Form(3),
+    client_key: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_bundle(scene_bundle)
     scene_root = _detect_scene_root(extract_dir)
@@ -602,7 +642,7 @@ def start_video_job_upload(
             shutil.copyfileobj(narration_file.file, f)
 
     music_specs = _parse_music_specs_form(music, extract_dir)
-    job = registry.create("video")
+    job = registry.create("video", client_key=client_key)
 
     def _target(job):
         return run_video_pipeline(
@@ -615,7 +655,8 @@ def start_video_job_upload(
             resolution=resolution_tuple,
             fps=fps,
             threads=threads,
-            preset=preset,
+            # Ignore client-provided preset; use backend config default.
+            preset=None,
             narration_volume=narration_volume,
             music_specs=music_specs,
             music_base_dir=extract_dir,
@@ -665,6 +706,7 @@ def start_video_job_upload_folder(
     subtitle_split_by_space: bool = Form(True),
     subtitle_black_background: bool = Form(True),
     subtitle_stroke_width: int = Form(3),
+    client_key: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_files(scene_files)
     scene_root = _detect_scene_root(extract_dir)
@@ -700,7 +742,7 @@ def start_video_job_upload_folder(
             )
 
     music_specs = _parse_music_specs_form(music, extract_dir)
-    job = registry.create("video")
+    job = registry.create("video", client_key=client_key)
 
     def _target(job):
         return run_video_pipeline(
@@ -713,7 +755,8 @@ def start_video_job_upload_folder(
             resolution=resolution_tuple,
             fps=fps,
             threads=threads,
-            preset=preset,
+            # Ignore client-provided preset; use backend config default.
+            preset=None,
             narration_volume=narration_volume,
             music_specs=music_specs,
             music_base_dir=extract_dir,
@@ -744,24 +787,29 @@ def start_video_job_upload_folder(
 
 @app.post("/api/video/ffmpeg/jobs")
 def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
-    images_dir, scenes_path, subtitles_path = _resolve_scene_inputs(req, require_subtitles=True)
+    images_dir, scenes_path, subtitles_path = _resolve_scene_inputs(
+        req, require_subtitles=req.burn_subtitles
+    )
 
     audio_path = _resolve_path(req.audio_path) if req.include_narration else None
     if req.include_narration and (audio_path is None or not audio_path.is_file()):
         raise HTTPException(status_code=400, detail=f"Audio file not found: {req.audio_path}")
 
-    job = registry.create("video_ffmpeg")
+    job = registry.create("video_ffmpeg", client_key=req.client_key)
     output_path = _TEMP_ROOT / "video" / f"{job.id}.mp4"
     resolution = _parse_resolution(req.resolution)
 
     music_specs = _normalize_music_specs(req.music, _ROOT)
 
-    save_state({
-        "last_images_dir": str(images_dir),
-        "last_scenes_path": str(scenes_path),
-        "last_audio_path": str(audio_path) if audio_path else None,
-        "last_video_output": str(output_path),
-    })
+    save_state(
+        {
+            "last_images_dir": str(images_dir),
+            "last_scenes_path": str(scenes_path),
+            "last_audio_path": str(audio_path) if audio_path else None,
+            "last_video_output": str(output_path),
+        },
+        client_key=req.client_key,
+    )
 
     def _target(job):
         return run_ffmpeg_video_pipeline(
@@ -774,7 +822,8 @@ def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
             resolution=resolution,
             fps=req.fps,
             threads=req.threads,
-            preset=req.preset,
+            # Ignore request preset; backend config decides.
+            preset=None,
             crf=req.crf,
             narration_volume=req.narration_volume,
             music_specs=music_specs,
@@ -788,6 +837,7 @@ def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
             subtitle_black_background=req.subtitle_black_background,
             subtitle_stroke_width=req.subtitle_stroke_width,
             pre_scale=req.pre_scale,
+            burn_subtitles=req.burn_subtitles,
         )
 
     def _on_finished(_job):
@@ -823,12 +873,15 @@ def start_ffmpeg_video_job_upload(
     subtitle_black_background: bool = Form(True),
     subtitle_stroke_width: int = Form(3),
     pre_scale: int = Form(4),
+    burn_subtitles: bool = Form(True),
+    client_key: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_bundle(scene_bundle)
-    scene_root = _detect_scene_root(extract_dir)
+    scene_root = _detect_scene_root(extract_dir, require_out_json=burn_subtitles)
     images_dir = _detect_images_dir(scene_root)
     scenes_path = scene_root / "scenes.json"
-    subtitles_path = scene_root / "out.json"
+    out_json = scene_root / "out.json"
+    subtitles_path = out_json if burn_subtitles and out_json.is_file() else None
     resolution_tuple = _parse_resolution(resolution)
 
     safe_output_name = os.path.basename(output_filename.strip() or "video.mp4")
@@ -846,7 +899,7 @@ def start_ffmpeg_video_job_upload(
         with audio_path.open("wb") as f:
             shutil.copyfileobj(narration_file.file, f)
 
-    job = registry.create("video_ffmpeg")
+    job = registry.create("video_ffmpeg", client_key=client_key)
 
     def _target(job):
         return run_ffmpeg_video_pipeline(
@@ -859,7 +912,8 @@ def start_ffmpeg_video_job_upload(
             resolution=resolution_tuple,
             fps=fps,
             threads=threads,
-            preset=preset,
+            # Ignore request preset; backend config decides.
+            preset=None,
             crf=crf,
             narration_volume=narration_volume,
             music_specs=[],
@@ -873,6 +927,7 @@ def start_ffmpeg_video_job_upload(
             subtitle_black_background=subtitle_black_background,
             subtitle_stroke_width=subtitle_stroke_width,
             pre_scale=pre_scale,
+            burn_subtitles=burn_subtitles,
         )
 
     def _on_finished(_job):
@@ -910,12 +965,15 @@ def start_ffmpeg_video_job_upload_folder(
     subtitle_black_background: bool = Form(True),
     subtitle_stroke_width: int = Form(3),
     pre_scale: int = Form(4),
+    burn_subtitles: bool = Form(True),
+    client_key: Optional[str] = Form(default=None),
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_files(scene_files)
-    scene_root = _detect_scene_root(extract_dir)
+    scene_root = _detect_scene_root(extract_dir, require_out_json=burn_subtitles)
     images_dir = _detect_images_dir(scene_root)
     scenes_path = scene_root / "scenes.json"
-    subtitles_path = scene_root / "out.json"
+    out_json = scene_root / "out.json"
+    subtitles_path = out_json if burn_subtitles and out_json.is_file() else None
     resolution_tuple = _parse_resolution(resolution)
 
     safe_output_name = os.path.basename(output_filename.strip() or "video.mp4")
@@ -943,7 +1001,7 @@ def start_ffmpeg_video_job_upload_folder(
             )
 
     music_specs = _parse_music_specs_form(music, extract_dir)
-    job = registry.create("video_ffmpeg")
+    job = registry.create("video_ffmpeg", client_key=client_key)
 
     def _target(job):
         return run_ffmpeg_video_pipeline(
@@ -956,7 +1014,8 @@ def start_ffmpeg_video_job_upload_folder(
             resolution=resolution_tuple,
             fps=fps,
             threads=threads,
-            preset=preset,
+            # Ignore request preset; backend config decides.
+            preset=None,
             crf=crf,
             narration_volume=narration_volume,
             music_specs=music_specs,
@@ -970,6 +1029,7 @@ def start_ffmpeg_video_job_upload_folder(
             subtitle_black_background=subtitle_black_background,
             subtitle_stroke_width=subtitle_stroke_width,
             pre_scale=pre_scale,
+            burn_subtitles=burn_subtitles,
         )
 
     def _on_finished(_job):
@@ -994,17 +1054,31 @@ def start_ffmpeg_video_job_upload_folder(
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str) -> Dict[str, Any]:
+def get_job(job_id: str, client_key: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     job = registry.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job id")
+    if not _is_same_client(job, client_key):
         raise HTTPException(status_code=404, detail="Unknown job id")
     return _job_payload(job)
 
 
+@app.get("/api/jobs")
+def list_jobs(
+    client_key: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=False),
+    kind: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    jobs = registry.list(client_key=client_key, active_only=active_only, kind=kind)
+    return {"jobs": [_job_payload(job) for job in jobs]}
+
+
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str) -> Dict[str, Any]:
+def cancel_job(job_id: str, client_key: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     job = registry.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job id")
+    if not _is_same_client(job, client_key):
         raise HTTPException(status_code=404, detail="Unknown job id")
     if job.progress.stage in {"done", "error", "cancelled"}:
         return _job_payload(job)
@@ -1014,18 +1088,30 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
 
 
 @app.get("/api/jobs/{job_id}/logs")
-def get_job_logs(job_id: str, offset: int = Query(0, ge=0)) -> Dict[str, Any]:
+def get_job_logs(
+    job_id: str,
+    offset: int = Query(0, ge=0),
+    client_key: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
     job = registry.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job id")
+    if not _is_same_client(job, client_key):
         raise HTTPException(status_code=404, detail="Unknown job id")
     lines, next_offset = job.logs_since(offset)
     return {"lines": lines, "next_offset": next_offset}
 
 
 @app.get("/api/jobs/{job_id}/artifact")
-def download_job_artifact(job_id: str, background_tasks: BackgroundTasks) -> FileResponse:
+def download_job_artifact(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    client_key: Optional[str] = Query(default=None),
+) -> FileResponse:
     job = registry.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job id")
+    if not _is_same_client(job, client_key):
         raise HTTPException(status_code=404, detail="Unknown job id")
     payload = job.to_dict()
     if payload["stage"] != "done":

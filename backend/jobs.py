@@ -24,6 +24,8 @@ class JobProgress:
 class Job:
     id: str
     kind: str                      # "prompts" | "video"
+    client_key: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
     progress: JobProgress = field(default_factory=JobProgress)
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -36,6 +38,8 @@ class Job:
             return {
                 "id": self.id,
                 "kind": self.kind,
+                "client_key": self.client_key,
+                "created_at": self.created_at,
                 "stage": self.progress.stage,
                 "message": self.progress.message,
                 "current": self.progress.current,
@@ -107,8 +111,11 @@ class JobRegistry:
         self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self._cleanup_thread.start()
 
-    def create(self, kind: str) -> Job:
-        job = Job(id=uuid.uuid4().hex, kind=kind)
+    def create(self, kind: str, *, client_key: Optional[str] = None) -> Job:
+        normalized_client_key = str(client_key).strip() if client_key is not None else None
+        if normalized_client_key == "":
+            normalized_client_key = None
+        job = Job(id=uuid.uuid4().hex, kind=kind, client_key=normalized_client_key)
         with self._lock:
             self._jobs[job.id] = job
         return job
@@ -116,6 +123,31 @@ class JobRegistry:
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def list(
+        self,
+        *,
+        client_key: Optional[str] = None,
+        active_only: bool = False,
+        kind: Optional[str] = None,
+    ) -> list[Job]:
+        normalized_client_key = str(client_key).strip() if client_key is not None else None
+        if normalized_client_key == "":
+            normalized_client_key = None
+        done_stages = {"done", "error", "cancelled"}
+        with self._lock:
+            jobs = list(self._jobs.values())
+        filtered: list[Job] = []
+        for job in jobs:
+            if normalized_client_key is not None and job.client_key != normalized_client_key:
+                continue
+            if kind is not None and job.kind != kind:
+                continue
+            if active_only and job.progress.stage in done_stages:
+                continue
+            filtered.append(job)
+        filtered.sort(key=lambda item: item.created_at, reverse=True)
+        return filtered
 
     def run(
         self,

@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from config import PipelineConfig, load_config
 from scene import (
     BaseLLMClient,
+    CancelledError,
     CharacterExtractor,
     GeminiClient,
     OpenAICompatibleClient,
@@ -145,37 +147,63 @@ def run_prompts_pipeline(
 
     # Step 3 — LLM prompts
     client = _build_client(cfg)
-    with client:
-        roster = None
-        if not cfg.skip_characters:
-            job.update(message="Extracting characters…")
-            roster = CharacterExtractor(client).extract(transcription, scene_cfg)
+    cancel_check = job.is_cancel_requested
+    watcher_stop = threading.Event()
 
-        generator = PromptGenerator(client)
-        language = scene_cfg.language or _language_name(transcription.language)
+    def _cancel_watcher() -> None:
+        # Close the LLM HTTP client as soon as cancellation is requested so any
+        # in-flight chat call aborts immediately instead of waiting for the
+        # provider's 60s timeout.
+        while not watcher_stop.wait(0.2):
+            if cancel_check():
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001 - best effort
+                    pass
+                return
 
-        scenes = []
-        for idx, seg in enumerate(merged, 1):
-            job.raise_if_cancelled()
-            job.update(
-                current=idx - 1,
-                message=f"Generating prompt {idx}/{total}…",
-            )
-            image_prompt, raw = generator.generate_for_segment(
-                seg, scene_cfg, language, roster
-            )
-            scenes.append(
-                SceneResult(
-                    group_id=seg.group_id,
-                    start=seg.start,
-                    end=seg.end,
-                    text=seg.text,
-                    source_segment_ids=seg.source_segment_ids,
-                    image_prompt=image_prompt,
-                    raw_llm_response=raw,
+    watcher_thread = threading.Thread(target=_cancel_watcher, daemon=True)
+    watcher_thread.start()
+
+    try:
+        with client:
+            roster = None
+            if not cfg.skip_characters:
+                job.update(message="Extracting characters…")
+                roster = CharacterExtractor(client).extract(
+                    transcription, scene_cfg, cancel_check=cancel_check
                 )
-            )
-            job.update(current=idx)
+
+            generator = PromptGenerator(client)
+            language = scene_cfg.language or _language_name(transcription.language)
+
+            scenes = []
+            for idx, seg in enumerate(merged, 1):
+                job.raise_if_cancelled()
+                job.update(
+                    current=idx - 1,
+                    message=f"Generating prompt {idx}/{total}…",
+                )
+                image_prompt, raw = generator.generate_for_segment(
+                    seg, scene_cfg, language, roster, cancel_check=cancel_check
+                )
+                scenes.append(
+                    SceneResult(
+                        group_id=seg.group_id,
+                        start=seg.start,
+                        end=seg.end,
+                        text=seg.text,
+                        source_segment_ids=seg.source_segment_ids,
+                        image_prompt=image_prompt,
+                        raw_llm_response=raw,
+                    )
+                )
+                job.update(current=idx)
+    except CancelledError as exc:
+        # Re-raise as the standard cancellation signal recognised by JobRegistry.
+        raise RuntimeError("Job cancelled by user") from exc
+    finally:
+        watcher_stop.set()
 
     pipeline_result = ScenePipelineResult(
         audio_path=transcription.audio_path,

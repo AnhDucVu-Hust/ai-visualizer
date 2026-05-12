@@ -49,15 +49,23 @@ def run_ffmpeg_video_pipeline(
     subtitle_black_background: bool = True,
     subtitle_stroke_width: int = 3,
     pre_scale: int = 4,
+    burn_subtitles: bool = True,
 ) -> Dict[str, Any]:
     job.raise_if_cancelled()
     job.update(message="Collecting ffmpeg inputs…")
     images = collect_images(images_dir)
     scenes = load_scenes(scenes_path)
-    subtitles = load_subtitle_segments(subtitles_path) if subtitles_path else None
+    subtitles = (
+        load_subtitle_segments(subtitles_path)
+        if (burn_subtitles and subtitles_path)
+        else None
+    )
     job.append_log(f"Found {len(images)} image files")
     job.append_log(f"Found {len(scenes)} scene entries")
-    job.append_log(f"Loaded {len(subtitles or [])} subtitle segments")
+    if burn_subtitles:
+        job.append_log(f"Loaded {len(subtitles or [])} subtitle segments")
+    else:
+        job.append_log("Subtitles: disabled (clean video, no burn-in)")
 
     effective_preset = preset or _default_preset_from_config()
     n = min(len(images), len(scenes))
@@ -118,6 +126,7 @@ def run_ffmpeg_video_pipeline(
         subtitle_black_background=subtitle_black_background,
         subtitle_stroke_width=subtitle_stroke_width,
         pre_scale=pre_scale,
+        burn_subtitles=burn_subtitles,
         cancel_check=job.is_cancel_requested,
         progress_callback=_on_ffmpeg_progress,
     )
@@ -130,4 +139,5 @@ def run_ffmpeg_video_pipeline(
         "engine": "ffmpeg",
         "scenes_path": str(scenes_path),
         "subtitles_path": str(subtitles_path) if subtitles_path else None,
+        "burn_subtitles": burn_subtitles,
     }

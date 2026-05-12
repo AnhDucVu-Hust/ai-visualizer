@@ -11,8 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from .models import (
     CharacterRoster,
@@ -22,7 +21,7 @@ from .models import (
     ScenePipelineResult,
     SceneResult,
 )
-from .base_client import BaseLLMClient, LLMError
+from .base_client import BaseLLMClient, CancelledError, LLMError, interruptible_sleep
 from stt.models import TranscriptionResult
 
 logger = logging.getLogger(__name__)
@@ -207,6 +206,7 @@ class PromptGenerator:
         config: SceneConfig,
         language: str = "unknown",
         roster: "CharacterRoster | None" = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> tuple[ImagePrompt, str]:
         """
         Generate an :class:`ImagePrompt` for a single merged segment.
@@ -232,7 +232,7 @@ class PromptGenerator:
             [c.name for c in roster.characters] if roster else [],
         )
 
-        raw = self._call_with_retry(messages, config)
+        raw = self._call_with_retry(messages, config, cancel_check=cancel_check)
 
         logger.debug(
             "LLM raw response for group %d:\n%s",
@@ -303,9 +303,12 @@ class PromptGenerator:
         self,
         messages: list,
         config: SceneConfig,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
         last_exc: Optional[Exception] = None
         for attempt in range(1, self._retry_attempts + 1):
+            if cancel_check is not None and cancel_check():
+                raise CancelledError()
             try:
                 return self._client.chat(
                     messages=messages,
@@ -313,7 +316,10 @@ class PromptGenerator:
                     temperature=config.temperature,
                     max_tokens=config.max_tokens,
                     response_format={"type": "json_object"},
+                    cancel_check=cancel_check,
                 )
+            except CancelledError:
+                raise
             except LLMError as exc:
                 last_exc = exc
                 # Exponential backoff; extra pause on rate-limit (429).
@@ -325,7 +331,7 @@ class PromptGenerator:
                     attempt, self._retry_attempts, exc, wait,
                 )
                 if attempt < self._retry_attempts:
-                    time.sleep(wait)
+                    interruptible_sleep(wait, cancel_check)
             except Exception as exc:
                 last_exc = exc
                 wait = self._retry_delay * (2 ** (attempt - 1))
@@ -334,7 +340,7 @@ class PromptGenerator:
                     attempt, self._retry_attempts, exc, wait,
                 )
                 if attempt < self._retry_attempts:
-                    time.sleep(wait)
+                    interruptible_sleep(wait, cancel_check)
 
         raise RuntimeError(
             f"All {self._retry_attempts} LLM attempts failed."

@@ -10,7 +10,8 @@ Adding a new provider:
 from __future__ import annotations
 
 import abc
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 
 class LLMError(Exception):
@@ -20,6 +21,33 @@ class LLMError(Exception):
         super().__init__(f"LLM error {status_code}: {message}")
         self.status_code = status_code
         self.message = message
+
+
+class CancelledError(RuntimeError):
+    """Raised when a long-running LLM operation is aborted by ``cancel_check``."""
+
+    def __init__(self, message: str = "Cancelled by user") -> None:
+        super().__init__(message)
+
+
+def interruptible_sleep(
+    seconds: float,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    poll_interval: float = 0.1,
+) -> None:
+    """Sleep up to ``seconds`` but wake up early when ``cancel_check`` returns True.
+
+    Raises :class:`CancelledError` as soon as cancellation is observed so the
+    caller can break out of any retry/backoff loop.
+    """
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while True:
+        if cancel_check is not None and cancel_check():
+            raise CancelledError()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(max(0.01, poll_interval), remaining))
 
 
 class BaseLLMClient(abc.ABC):
@@ -44,6 +72,7 @@ class BaseLLMClient(abc.ABC):
         temperature: float = 0.7,
         max_tokens: int = 512,
         response_format: Optional[Dict[str, Any]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
         """
         Send a chat request and return the assistant's text content.
@@ -62,6 +91,10 @@ class BaseLLMClient(abc.ABC):
         response_format:
             Optional hint; clients that support JSON mode use
             ``{"type": "json_object"}``.
+        cancel_check:
+            Optional callback returning ``True`` when the caller wants to
+            abort.  Implementations should poll this between retries / sleeps
+            and raise :class:`CancelledError` as soon as it observes True.
         """
 
     def close(self) -> None:

@@ -7,12 +7,11 @@ This mirrors ``generate_scenes.main()`` but reports granular progress to a
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config import PipelineConfig, load_config
+from config import PipelineConfig, load_config, resolve_app_config_yaml_path
 from scene import (
     BaseLLMClient,
     CancelledError,
@@ -32,22 +31,10 @@ from .jobs import Job
 from .stt_runtime import transcribe_shared
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_CONFIG = _ROOT / "config.yaml"
-_CONFIG_ENV = "APP_CONFIG_PATH"
 
 
 def _resolve_config_path() -> Optional[Path]:
-    from_env = os.getenv(_CONFIG_ENV)
-    if from_env:
-        path = Path(from_env).expanduser()
-        if not path.is_absolute():
-            path = path.resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Config file from {_CONFIG_ENV} not found: {path}")
-        return path
-    if _DEFAULT_CONFIG.exists():
-        return _DEFAULT_CONFIG
-    return None
+    return resolve_app_config_yaml_path(_ROOT)
 
 
 def _load_cfg(

@@ -9,6 +9,7 @@ Loading priority (highest → lowest):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -212,6 +213,108 @@ def _flatten_yaml(data: dict) -> dict:
     return flat
 
 
+def _optional_bool_env(name: str) -> Optional[bool]:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    v = str(raw).strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True
+    if v in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _apply_env_pipeline_overrides(base: dict) -> None:
+    """
+    Optional overrides from environment (Render / shell). Only sets a field when
+    the corresponding env var is non-empty.
+
+    Matches ``config.yaml`` sections ``transcription`` and ``llm`` plus ``verbose``.
+    """
+    str_pairs = [
+        ("TRANSCRIPTION_ENGINE", "stt_engine"),
+        ("STT_ENGINE", "stt_engine"),
+        ("STT_MODEL", "stt_model"),
+        ("STT_DEVICE", "device"),
+        ("STT_COMPUTE_TYPE", "compute_type"),
+        ("LLM_CLIENT", "llm_client"),
+        ("LLM_MODEL", "model"),
+        ("LLM_LANGUAGE", "language"),
+        ("GLOBAL_STYLE", "global_style"),
+    ]
+    for env_k, field_k in str_pairs:
+        raw = os.environ.get(env_k)
+        if raw is not None and str(raw).strip() != "":
+            base[field_k] = str(raw).strip()
+
+    base_url = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+    if base_url is not None and str(base_url).strip() != "":
+        base["base_url"] = str(base_url).strip()
+
+    temp = os.environ.get("LLM_TEMPERATURE")
+    if temp is not None and str(temp).strip() != "":
+        try:
+            base["temperature"] = float(str(temp).strip())
+        except ValueError:
+            pass
+    mt = os.environ.get("LLM_MAX_TOKENS")
+    if mt is not None and str(mt).strip() != "":
+        try:
+            base["max_tokens"] = int(str(mt).strip())
+        except ValueError:
+            pass
+
+    lp = _optional_bool_env("STT_LOG_PROGRESS")
+    if lp is not None:
+        base["log_progress"] = lp
+    sk = _optional_bool_env("SKIP_CHARACTERS")
+    if sk is not None:
+        base["skip_characters"] = sk
+    vb = _optional_bool_env("VERBOSE")
+    if vb is None:
+        vb = _optional_bool_env("APP_VERBOSE")
+    if vb is not None:
+        base["verbose"] = vb
+
+
+def _apply_env_api_keys(base: dict) -> None:
+    """
+    If YAML + overrides left no keys, fill ``api_keys`` from the env var that
+    matches ``llm_client`` (comma-separated list for rotation).
+
+    - gemini     → GEMINI_API_KEY
+    - openai     → OPENAI_API_KEY  (Groq, OpenAI, Together, …)
+    - openrouter → OPENROUTER_API_KEY
+    """
+    existing = base.get("api_keys")
+    if isinstance(existing, list) and len(existing) > 0:
+        return
+    single = base.get("api_key")
+    if single is not None and str(single).strip():
+        return
+
+    client = base.get("llm_client") or "gemini"
+    env_name = {
+        "gemini": "GEMINI_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }.get(client, "GEMINI_API_KEY")
+    # Alias LLM_API_KEYS / GEMINI_API_KEYS — same meaning as llm.api_keys in YAML (comma-separated).
+    raw = ""
+    if client == "openai":
+        raw = os.environ.get("LLM_API_KEYS") or os.environ.get(env_name, "") or ""
+    elif client == "gemini":
+        raw = os.environ.get("GEMINI_API_KEYS") or os.environ.get(env_name, "") or ""
+    elif client == "openrouter":
+        raw = os.environ.get("LLM_API_KEYS") or os.environ.get(env_name, "") or ""
+    else:
+        raw = os.environ.get(env_name, "") or ""
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if keys:
+        base["api_keys"] = keys
+
+
 def load_config(
     yaml_path: Optional[str | Path] = None,
     overrides: Optional[dict] = None,
@@ -222,7 +325,10 @@ def load_config(
     Priority (highest → lowest):
       1. overrides  — CLI args that were explicitly set by the user
       2. yaml_path  — values from the config YAML file
-      3. Pydantic defaults defined in PipelineConfig
+      3. Same keys from environment variables (see ``_apply_env_pipeline_overrides``)
+      4. Comma-separated API keys from env (see ``_apply_env_api_keys``) when
+         ``api_key`` / ``api_keys`` are still unset
+      5. Pydantic defaults defined in PipelineConfig
     """
     base: dict = {}
 
@@ -236,4 +342,30 @@ def load_config(
     if overrides:
         base.update(overrides)
 
+    _apply_env_pipeline_overrides(base)
+    _apply_env_api_keys(base)
+
     return PipelineConfig(**base)
+
+
+_APP_CONFIG_ENV = "APP_CONFIG_PATH"
+
+
+def resolve_app_config_yaml_path(repo_root: Path | str) -> Optional[Path]:
+    """
+    Backend YAML path: ``APP_CONFIG_PATH``, else ``<repo_root>/config.yaml`` if it exists,
+    else ``None`` (defaults only; API keys can come from env).
+    """
+    root = Path(repo_root).resolve()
+    from_env = os.getenv(_APP_CONFIG_ENV)
+    if from_env:
+        path = Path(from_env).expanduser()
+        if not path.is_absolute():
+            path = path.resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Config file from {_APP_CONFIG_ENV} not found: {path}")
+        return path
+    default = root / "config.yaml"
+    if default.exists():
+        return default
+    return None

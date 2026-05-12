@@ -9,6 +9,12 @@ import tempfile
 import zipfile
 import uuid
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Repo-root .env before anything reads os.environ (covers ``uvicorn backend.app:app``).
+# Render: no file → no-op; vars come from the platform.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -320,17 +326,23 @@ class VideoJobRequest(BaseModel):
 
 
 class FfmpegVideoJobRequest(VideoJobRequest):
-    burn_subtitles: bool = True
-    crf: int = 20
-    subtitle_font_name: str = "Arial"
-    subtitle_font_size: int = 44
-    subtitle_bottom_margin: int = 72
-    subtitle_max_lines: int = 2
-    subtitle_max_chars: int = 20
-    subtitle_split_by_space: bool = True
-    subtitle_black_background: bool = True
-    subtitle_stroke_width: int = 3
-    pre_scale: int = 4
+    """JSON body: omit a field to fall back to ``video_combine_config.yaml`` / env (see ``backend/video_combine_settings``)."""
+
+    fps: Optional[int] = None
+    threads: Optional[int] = None
+    preset: Optional[str] = None
+    narration_volume: Optional[float] = None
+    burn_subtitles: Optional[bool] = None
+    crf: Optional[int] = None
+    subtitle_font_name: Optional[str] = None
+    subtitle_font_size: Optional[int] = None
+    subtitle_bottom_margin: Optional[int] = None
+    subtitle_max_lines: Optional[int] = None
+    subtitle_max_chars: Optional[int] = None
+    subtitle_split_by_space: Optional[bool] = None
+    subtitle_black_background: Optional[bool] = None
+    subtitle_stroke_width: Optional[int] = None
+    pre_scale: Optional[int] = None
 
 
 def _parse_resolution(s: str) -> tuple[int, int]:

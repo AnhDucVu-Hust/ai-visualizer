@@ -8,14 +8,13 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from config import load_config
+from config import load_config, resolve_app_config_yaml_path
 from stt import GroqEngine, Transcriber, TranscriptionConfig
 from stt.models import ComputeType, Device, TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_CONFIG = _ROOT / "config.yaml"
 
 _TRANSCIBER_LOCK = threading.Lock()
 _RUNTIME_LOCK = threading.Lock()
@@ -24,15 +23,25 @@ _SHARED_TRANSCRIBER: Transcriber | None = None
 
 
 def _resolve_groq_api_keys() -> list[str]:
-    cfg = load_config(yaml_path=_DEFAULT_CONFIG if _DEFAULT_CONFIG.exists() else None)
+    yaml_path = resolve_app_config_yaml_path(_ROOT)
+    cfg = load_config(yaml_path=yaml_path if yaml_path else None)
     keys: list[str] = []
     if cfg.api_keys:
         keys = [str(k).strip() for k in cfg.api_keys if str(k).strip()]
     elif cfg.api_key:
-        # Allow comma-separated fallback.
         keys = [k.strip() for k in str(cfg.api_key).split(",") if k.strip()]
     if not keys:
-        raise ValueError("No Groq API keys found. Set llm.api_keys (preferred) or llm.api_key in config.yaml.")
+        raw = (
+            os.environ.get("LLM_API_KEYS")
+            or os.environ.get("OPENAI_API_KEY")
+            or ""
+        )
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if not keys:
+        raise ValueError(
+            "No Groq API keys found. Set llm.api_keys / llm.api_key in config, "
+            "or OPENAI_API_KEY (comma-separated) in the environment / .env."
+        )
     return keys
 
 
@@ -72,7 +81,8 @@ def preload_default_stt_model() -> None:
         return
 
     try:
-        cfg = load_config(yaml_path=_DEFAULT_CONFIG if _DEFAULT_CONFIG.exists() else None)
+        yaml_path = resolve_app_config_yaml_path(_ROOT)
+        cfg = load_config(yaml_path=yaml_path if yaml_path else None)
         if cfg.stt_engine == "groq":
             logger.info("Skipping STT preload for engine=groq (remote model).")
             return

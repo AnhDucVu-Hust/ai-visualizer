@@ -11,6 +11,8 @@ venv/
 # Results / model cache
 results/
 *.json
+# Keep activation keys template in repo (negate broad *.json above)
+!backend/keys.json
 
 # App-state persisted by the UI launcher
 .app_state.json

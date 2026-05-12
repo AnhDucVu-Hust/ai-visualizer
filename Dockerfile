@@ -26,8 +26,7 @@ COPY backend /app/backend
 COPY video_combine /app/video_combine
 COPY run_app.py /app/run_app.py
 
-# Non-secret YAML — keys from Render env (OPENAI_API_KEY comma-separated, etc.)
-COPY config.template.yaml /app/config.yaml
+
 COPY video_combine_config.yaml /app/video_combine_config.yaml
 
 EXPOSE 8000

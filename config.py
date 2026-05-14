@@ -323,12 +323,16 @@ def load_config(
     Build a PipelineConfig from an optional YAML file plus explicit CLI overrides.
 
     Priority (highest → lowest):
-      1. overrides  — CLI args that were explicitly set by the user
-      2. yaml_path  — values from the config YAML file
-      3. Same keys from environment variables (see ``_apply_env_pipeline_overrides``)
+      1. overrides  — CLI args or API body (e.g. frontend ``style`` → ``global_style``)
+      2. Same keys from environment variables (see ``_apply_env_pipeline_overrides``)
+      3. yaml_path  — values from the config YAML file
       4. Comma-separated API keys from env (see ``_apply_env_api_keys``) when
          ``api_key`` / ``api_keys`` are still unset
       5. Pydantic defaults defined in PipelineConfig
+
+    Env is merged after YAML so deployment defaults override the file, but explicit
+    overrides are merged last so they beat both YAML and env (fixes ``GLOBAL_STYLE``
+    overwriting the UI style).
     """
     base: dict = {}
 
@@ -339,10 +343,11 @@ def load_config(
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         base = _flatten_yaml(raw)
 
+    _apply_env_pipeline_overrides(base)
+
     if overrides:
         base.update(overrides)
 
-    _apply_env_pipeline_overrides(base)
     _apply_env_api_keys(base)
 
     return PipelineConfig(**base)

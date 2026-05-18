@@ -424,10 +424,8 @@ def _escape_subtitles_path(path: Path) -> str:
     We pass this as ``filename=...`` (named option) because ffmpeg's filter
     parser can misread bare absolute paths in complex graphs.
     """
-    s = str(path).replace("\\", "/")
-    s = s.replace(":", r"\:")
-    s = s.replace("'", r"\'")
-    return s
+    subtitle_path = Path(path).resolve().as_posix()
+    return subtitle_path
 
 
 def _resolve_ffmpeg_binaries() -> tuple[str, str]:

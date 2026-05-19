@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from video_combine.combine import collect_images, load_scenes, load_subtitle_segments
+from video_combine.combine import collect_images_from_dirs, load_scenes, load_subtitle_segments
 from video_combine.ffmpeg_combine import build_video
 
 from .jobs import Job
@@ -26,7 +26,7 @@ def _pick_opt(merged: dict[str, Any], key: str, explicit: Optional[Any], fallbac
 def run_ffmpeg_video_pipeline(
     job: Job,
     *,
-    images_dir: Path,
+    image_dirs: list[Path],
     scenes_path: Path,
     subtitles_path: Optional[Path],
     audio_path: Optional[Path],
@@ -72,14 +72,18 @@ def run_ffmpeg_video_pipeline(
 
     job.raise_if_cancelled()
     job.update(message="Collecting ffmpeg inputs…")
-    images = collect_images(images_dir)
+    images = collect_images_from_dirs(image_dirs)
     scenes = load_scenes(scenes_path)
     subtitles = (
         load_subtitle_segments(subtitles_path)
         if (burn_b and subtitles_path)
         else None
     )
-    job.append_log(f"Found {len(images)} image files")
+    if len(image_dirs) == 1:
+        job.append_log(f"Found {len(images)} image files in {image_dirs[0].name}")
+    else:
+        names = ", ".join(d.name for d in image_dirs)
+        job.append_log(f"Found {len(images)} image files across {len(image_dirs)} folders ({names})")
     job.append_log(f"Found {len(scenes)} scene entries")
     if burn_b:
         job.append_log(f"Loaded {len(subtitles or [])} subtitle segments")

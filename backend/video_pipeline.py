@@ -19,7 +19,7 @@ from moviepy import (
 from video_combine.combine import (
     build_subtitle_clips,
     build_music_clips,
-    collect_images,
+    collect_images_from_dirs,
     ken_burns_clip,
     load_scenes,
     load_subtitle_segments,
@@ -31,7 +31,7 @@ from .jobs import Job
 def run_video_pipeline(
     job: Job,
     *,
-    images_dir: Path,
+    image_dirs: list[Path],
     scenes_path: Path,
     subtitles_path: Optional[Path],
     audio_path: Optional[Path],
@@ -53,7 +53,7 @@ def run_video_pipeline(
 ) -> Dict[str, Any]:
     job.raise_if_cancelled()
     job.update(message="Collecting images…")
-    images = collect_images(images_dir)
+    images = collect_images_from_dirs(image_dirs)
     scenes = load_scenes(scenes_path)
     subtitles = load_subtitle_segments(subtitles_path) if subtitles_path else None
 

@@ -1,7 +1,7 @@
 """Combine a folder of images with scenes.json timestamps and an audio track.
 
-Images are matched to scenes one-to-one, ordered by a numeric prefix in the
-filename (e.g. ``01_intro.png``, ``02_city.jpg`` ...). Each image is shown
+Images are matched to scenes one-to-one, ordered by numeric filenames
+(e.g. ``001.png``, ``002.png`` ...). Each image is shown
 for its scene's ``end - start`` duration with a Ken Burns style zoom/pan.
 The full audio track is then muxed over the resulting video.
 
@@ -54,42 +54,33 @@ from moviepy import (
 )
 from PIL import Image, ImageDraw, ImageFont
 
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-
-# The stem must be pure digits, or digits followed by a non-alphanumeric
-# separator (e.g. ``001``, ``001_intro``, ``01-hero``, ``07.final``).
-# This intentionally rejects ``001b``, ``001alt``, ``01a2`` — anything with a
-# letter or digit glued directly onto the index.
-_PREFIX_RE = re.compile(r"^\s*(\d+)(?![A-Za-z0-9])")
+# Scene images must be named ``<digits>.png`` only (e.g. ``001.png``, ``12.png``).
+_IMAGE_DIR_RE = re.compile(r"^images(?:_(\d+))?$")
 
 
 def _prefix_index(path: Path) -> int | None:
-    """Return the numeric prefix of ``path.stem`` if it's a "clean" index.
-
-    ``001.png`` -> ``1``, ``07_hero.jpg`` -> ``7``, ``001b.png`` -> ``None``.
-    """
-    m = _PREFIX_RE.match(path.stem)
-    return int(m.group(1)) if m else None
+    """Return the scene index from ``NNN.png``, or ``None`` if the name is invalid."""
+    if path.suffix.lower() != ".png":
+        return None
+    stem = path.stem.strip()
+    if not stem.isdigit():
+        return None
+    return int(stem)
 
 
 def collect_images(folder: Path) -> list[Path]:
-    """Return image files in ``folder`` sorted by numeric filename prefix.
+    """Return ``NNN.png`` files in ``folder`` sorted by scene number.
 
-    Accepted names: the stem is either pure digits (``001.png``, ``07.jpg``)
-    or digits followed by a non-alphanumeric separator
-    (``01_intro.png``, ``07-final.jpg``, ``3.hero.jpg``).
-
-    Rejected names: anything with a letter or digit glued onto the index
-    (``001b.png``, ``01alt.jpg``, ``1a2.png``). These are skipped with a
-    warning so the image/scene mapping stays predictable. If two files share
-    the same index the first one (alphabetical tiebreak) wins.
+    Only ``<digits>.png`` is accepted (e.g. ``001.png``, ``002.png``). Other
+    names are skipped with a warning. If two files share the same index, the
+    first one (alphabetical tiebreak) wins.
     """
     if not folder.is_dir():
         raise FileNotFoundError(f"Image folder not found: {folder}")
 
-    all_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+    all_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".png"]
     if not all_images:
-        raise FileNotFoundError(f"No images found in {folder} (supported: {sorted(IMAGE_EXTS)})")
+        raise FileNotFoundError(f"No .png images found in {folder}")
 
     indexed: list[tuple[int, Path]] = []
     skipped: list[Path] = []
@@ -103,13 +94,13 @@ def collect_images(folder: Path) -> list[Path]:
     if skipped:
         names = ", ".join(sorted(p.name for p in skipped))
         print(
-            f"[warn] Ignoring {len(skipped)} file(s) without a numeric prefix: {names}",
+            f"[warn] Ignoring {len(skipped)} file(s) not named <digits>.png: {names}",
             file=sys.stderr,
         )
 
     if not indexed:
         raise FileNotFoundError(
-            f"No images with a numeric prefix (e.g. '01_*.png') found in {folder}"
+            f"No <digits>.png images found in {folder} (e.g. 001.png, 002.png)"
         )
 
     indexed.sort(key=lambda t: (t[0], t[1].name))
@@ -126,6 +117,62 @@ def collect_images(folder: Path) -> list[Path]:
             seen[idx] = p
 
     return [seen[k] for k in sorted(seen)]
+
+
+def discover_image_dirs(scene_root: Path) -> list[Path]:
+    """Return ``images``, ``images_1``, ``images_2``, … under *scene_root*, sorted.
+
+    Folder ``images`` sorts before ``images_1``, ``images_2``, etc. When no
+    matching subfolder exists, returns ``[scene_root]`` so numbered files in
+    the scene root still work.
+    """
+    if not scene_root.is_dir():
+        raise FileNotFoundError(f"Scene folder not found: {scene_root}")
+
+    found: list[tuple[int, Path]] = []
+    for child in scene_root.iterdir():
+        if not child.is_dir():
+            continue
+        m = _IMAGE_DIR_RE.match(child.name)
+        if m:
+            suffix = m.group(1)
+            order = 0 if suffix is None else int(suffix)
+            found.append((order, child))
+
+    if found:
+        found.sort(key=lambda t: t[0])
+        return [p for _, p in found]
+
+    return [scene_root]
+
+
+def collect_images_from_dirs(folders: list[Path]) -> list[Path]:
+    """Collect images from one or more folders in order.
+
+    Each folder uses the same ``NNN.png`` naming as :func:`collect_images`.
+    Later folders continue the global sequence (e.g. ``001``–``100`` in
+    ``images_1``, then ``001``–``099`` in ``images_2`` map to scenes 1–199).
+    """
+    if not folders:
+        raise FileNotFoundError("No image folders provided")
+
+    if len(folders) == 1:
+        return collect_images(folders[0])
+
+    all_images: list[Path] = []
+    for folder in folders:
+        chunk = collect_images(folder)
+        if not chunk:
+            raise FileNotFoundError(f"No images found in {folder}")
+        if all_images:
+            start = len(all_images) + 1
+            end = len(all_images) + len(chunk)
+            print(
+                f"[info] {folder.name}: {len(chunk)} images (scenes {start}–{end})",
+                file=sys.stderr,
+            )
+        all_images.extend(chunk)
+    return all_images
 
 
 def parse_music_spec(s: str) -> dict:
@@ -920,7 +967,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, default=pre_args.config, help="YAML config file. CLI flags override values from the config.")
-    parser.add_argument("--images", type=Path, default=None, help="Folder containing images to merge (ordered by numeric filename prefix).")
+    parser.add_argument(
+        "--images",
+        type=Path,
+        default=None,
+        help=(
+            "Scene root or image folder. If the path contains images/, images_1/, "
+            "images_2/, … those folders are merged in order (each batch numbered from 001)."
+        ),
+    )
     parser.add_argument("--scenes", type=Path, default=repo_root / "results" / "scenes.json", help="Path to scenes.json (default: results/scenes.json).")
     parser.add_argument(
         "--subtitles-json",
@@ -976,7 +1031,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "--images is required (either via CLI or set input.images in the --config file)."
         )
 
-    images = collect_images(args.images)
+    image_dirs = discover_image_dirs(args.images)
+    images = collect_images_from_dirs(image_dirs)
     scenes = load_scenes(args.scenes)
     audio = None if args.no_audio else args.audio
     if audio is not None and not audio.is_file():
@@ -1008,7 +1064,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.config is not None:
         print(f"Loaded config: {args.config}")
-    print(f"Found {len(images)} images in {args.images}")
+    if len(image_dirs) == 1:
+        print(f"Found {len(images)} images in {image_dirs[0]}")
+    else:
+        names = ", ".join(d.name for d in image_dirs)
+        print(f"Found {len(images)} images across {len(image_dirs)} folders ({names})")
     print(f"Found {len(scenes)} scenes in {args.scenes}")
     if audio is not None:
         print(f"Narration track: {audio} (volume {args.narration_volume:.2f})")

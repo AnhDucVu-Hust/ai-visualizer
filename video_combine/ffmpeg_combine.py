@@ -42,7 +42,8 @@ import shutil
 import ffmpeg
 
 from .combine import (
-    collect_images,
+    collect_images_from_dirs,
+    discover_image_dirs,
     detect_resolution,
     load_music_config,
     load_scenes,
@@ -835,7 +836,15 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=pre_args.config,
         help="YAML config file (same format as combine.py). CLI flags override it.",
     )
-    parser.add_argument("--images", type=Path, default=None, help="Folder of numerically-prefixed images.")
+    parser.add_argument(
+        "--images",
+        type=Path,
+        default=None,
+        help=(
+            "Scene root or image folder. Auto-discovers images/, images_1/, images_2/, … "
+            "and merges batches in order."
+        ),
+    )
     parser.add_argument("--scenes", type=Path, default=repo_root / "results" / "scenes.json")
     parser.add_argument("--subtitles-json", type=Path, default=None,
                         help="Optional STT out.json for segment-timed subtitles.")
@@ -891,7 +900,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.images is None:
         parser.error("--images is required (CLI or input.images in --config).")
 
-    images = collect_images(args.images)
+    image_dirs = discover_image_dirs(args.images)
+    images = collect_images_from_dirs(image_dirs)
     scenes = load_scenes(args.scenes)
     audio = None if args.no_audio else args.audio
     if audio is not None and not audio.is_file():
@@ -922,7 +932,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.config is not None:
         print(f"Loaded config: {args.config}")
-    print(f"Found {len(images)} images in {args.images}")
+    if len(image_dirs) == 1:
+        print(f"Found {len(images)} images in {image_dirs[0]}")
+    else:
+        names = ", ".join(d.name for d in image_dirs)
+        print(f"Found {len(images)} images across {len(image_dirs)} folders ({names})")
     print(f"Found {len(scenes)} scenes in {args.scenes}")
     if audio is not None:
         print(f"Narration track: {audio} (volume {args.narration_volume:.2f})")

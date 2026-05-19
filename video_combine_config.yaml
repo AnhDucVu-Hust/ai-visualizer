@@ -19,8 +19,7 @@
 # Input — images folder + scenes.json
 # -----------------------------------------------------------------------------
 input:
-  # Folder containing images. Files must start with a numeric prefix (e.g.
-  # 01_intro.png, 02_city.jpg, ...) so scene mapping stays predictable.
+  # Folder containing images named <digits>.png (e.g. 001.png, 002.png, ...).
   images: results_vietnam/images
 
   # Scenes file with start/end timestamps (output of generate_scenes.py).

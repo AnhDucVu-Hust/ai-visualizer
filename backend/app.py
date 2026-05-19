@@ -485,11 +485,10 @@ def _detect_scene_root(extract_dir: Path, *, require_out_json: bool = True) -> P
     )
 
 
-def _detect_images_dir(scene_root: Path) -> Path:
-    images_dir = scene_root / "images"
-    if images_dir.is_dir():
-        return images_dir
-    return scene_root
+def _detect_image_dirs(scene_root: Path) -> list[Path]:
+    from video_combine.combine import discover_image_dirs
+
+    return discover_image_dirs(scene_root)
 
 
 def _resolve_scene_inputs(
@@ -502,28 +501,39 @@ def _resolve_scene_inputs(
     images_dir = _resolve_path(req.images_dir)
     scenes_path = _resolve_path(req.scenes_path)
     subtitles_path = _resolve_path(req.subtitles_path)
+    image_dirs: list[Path] = []
 
     if scene_dir:
         if not scene_dir.is_dir():
             raise HTTPException(status_code=400, detail=f"Scene folder not found: {req.scene_dir}")
 
         if images_dir is None:
-            images_candidate = scene_dir / "images"
-            images_dir = images_candidate if images_candidate.is_dir() else scene_dir
+            image_dirs = _detect_image_dirs(scene_dir)
         if scenes_path is None:
             scenes_path = scene_dir / "scenes.json"
         if subtitles_path is None:
             subtitle_candidate = scene_dir / "out.json"
             subtitles_path = subtitle_candidate if subtitle_candidate.is_file() else None
 
-    if not images_dir or not images_dir.is_dir():
+    if images_dir is not None:
+        if not images_dir.is_dir():
+            raise HTTPException(status_code=400, detail=f"Images folder not found: {req.images_dir}")
+        image_dirs = [images_dir]
+    elif not image_dirs:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Images folder not found. Provide `images_dir` directly, or set "
-                "`scene_dir` containing either an `images/` subfolder or numbered images."
+                "`scene_dir` containing `images/`, `images_1/`/`images_2/`…, or numbered images."
             ),
         )
+
+    for folder in image_dirs:
+        if not folder.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Images folder not found: {folder}",
+            )
     if not scenes_path or not scenes_path.is_file():
         raise HTTPException(
             status_code=400,
@@ -543,12 +553,12 @@ def _resolve_scene_inputs(
             ),
         )
 
-    return images_dir, scenes_path, subtitles_path
+    return image_dirs, scenes_path, subtitles_path
 
 
 @app.post("/api/video/jobs")
 def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
-    images_dir, scenes_path, subtitles_path = _resolve_scene_inputs(req, require_subtitles=True)
+    image_dirs, scenes_path, subtitles_path = _resolve_scene_inputs(req, require_subtitles=True)
     job = registry.create("video", client_key=req.client_key)
 
     audio_path = _resolve_path(req.audio_path) if req.include_narration else None
@@ -562,7 +572,7 @@ def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
 
     save_state(
         {
-            "last_images_dir": str(images_dir),
+            "last_images_dir": "|".join(str(d) for d in image_dirs),
             "last_scenes_path": str(scenes_path),
             "last_audio_path": str(audio_path) if audio_path else None,
             "last_video_output": str(output_path),
@@ -573,7 +583,7 @@ def start_video_job(req: VideoJobRequest) -> Dict[str, Any]:
     def _target(job):
         return run_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,
@@ -631,7 +641,7 @@ def start_video_job_upload(
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_bundle(scene_bundle)
     scene_root = _detect_scene_root(extract_dir)
-    images_dir = _detect_images_dir(scene_root)
+    image_dirs = _detect_image_dirs(scene_root)
     scenes_path = scene_root / "scenes.json"
     subtitles_path = scene_root / "out.json"
     if not subtitles_path.is_file():
@@ -659,7 +669,7 @@ def start_video_job_upload(
     def _target(job):
         return run_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,
@@ -722,7 +732,7 @@ def start_video_job_upload_folder(
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_files(scene_files)
     scene_root = _detect_scene_root(extract_dir)
-    images_dir = _detect_images_dir(scene_root)
+    image_dirs = _detect_image_dirs(scene_root)
     scenes_path = scene_root / "scenes.json"
     subtitles_path = scene_root / "out.json"
     if not subtitles_path.is_file():
@@ -759,7 +769,7 @@ def start_video_job_upload_folder(
     def _target(job):
         return run_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,
@@ -799,7 +809,7 @@ def start_video_job_upload_folder(
 
 @app.post("/api/video/ffmpeg/jobs")
 def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
-    images_dir, scenes_path, subtitles_path = _resolve_scene_inputs(
+    image_dirs, scenes_path, subtitles_path = _resolve_scene_inputs(
         req, require_subtitles=req.burn_subtitles
     )
 
@@ -815,7 +825,7 @@ def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
 
     save_state(
         {
-            "last_images_dir": str(images_dir),
+            "last_images_dir": "|".join(str(d) for d in image_dirs),
             "last_scenes_path": str(scenes_path),
             "last_audio_path": str(audio_path) if audio_path else None,
             "last_video_output": str(output_path),
@@ -826,7 +836,7 @@ def start_ffmpeg_video_job(req: FfmpegVideoJobRequest) -> Dict[str, Any]:
     def _target(job):
         return run_ffmpeg_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,
@@ -890,7 +900,7 @@ def start_ffmpeg_video_job_upload(
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_bundle(scene_bundle)
     scene_root = _detect_scene_root(extract_dir, require_out_json=burn_subtitles)
-    images_dir = _detect_images_dir(scene_root)
+    image_dirs = _detect_image_dirs(scene_root)
     scenes_path = scene_root / "scenes.json"
     out_json = scene_root / "out.json"
     subtitles_path = out_json if burn_subtitles and out_json.is_file() else None
@@ -916,7 +926,7 @@ def start_ffmpeg_video_job_upload(
     def _target(job):
         return run_ffmpeg_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,
@@ -982,7 +992,7 @@ def start_ffmpeg_video_job_upload_folder(
 ) -> Dict[str, Any]:
     extract_dir = _extract_scene_files(scene_files)
     scene_root = _detect_scene_root(extract_dir, require_out_json=burn_subtitles)
-    images_dir = _detect_images_dir(scene_root)
+    image_dirs = _detect_image_dirs(scene_root)
     scenes_path = scene_root / "scenes.json"
     out_json = scene_root / "out.json"
     subtitles_path = out_json if burn_subtitles and out_json.is_file() else None
@@ -1018,7 +1028,7 @@ def start_ffmpeg_video_job_upload_folder(
     def _target(job):
         return run_ffmpeg_video_pipeline(
             job,
-            images_dir=images_dir,
+            image_dirs=image_dirs,
             scenes_path=scenes_path,
             subtitles_path=subtitles_path,
             audio_path=audio_path,

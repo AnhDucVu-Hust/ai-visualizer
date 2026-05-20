@@ -274,6 +274,7 @@ class GroqEngine(BaseSTTEngine):
                     self._rotate_key()
                     continue
 
+                # 429 covers rate-limit, quota, and key restriction (Groq often uses 429).
                 if resp.status_code == 429:
                     saw_quota_error = True
                     detail = self._safe_error_detail(resp)
@@ -286,9 +287,13 @@ class GroqEngine(BaseSTTEngine):
                     self._rotate_key()
                     continue
 
-                if 500 <= resp.status_code <= 599:
+                # Same pattern as scene/openai_client.py: rotate through all keys on any
+                # other HTTP error (401 invalid key, 403 forbidden, 5xx, …).
+                if resp.status_code != 200:
                     detail = self._safe_error_detail(resp)
-                    last_error = RuntimeError(f"Groq server error ({resp.status_code}): {detail}")
+                    last_error = RuntimeError(
+                        f"Groq transcription failed ({resp.status_code}): {detail}"
+                    )
                     logger.warning(
                         "GroqEngine: %d on key #%d: %s (rotating)",
                         resp.status_code,
@@ -297,10 +302,6 @@ class GroqEngine(BaseSTTEngine):
                     )
                     self._rotate_key()
                     continue
-
-                if resp.status_code != 200:
-                    detail = self._safe_error_detail(resp)
-                    raise RuntimeError(f"Groq transcription failed ({resp.status_code}): {detail}")
 
                 try:
                     payload = resp.json()

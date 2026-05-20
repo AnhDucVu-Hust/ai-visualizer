@@ -144,6 +144,15 @@ class OpenAICompatibleClient(BaseLLMClient):
         """Advance to the next API key (wraps around)."""
         self._key_idx = (self._key_idx + 1) % len(self._api_keys)
 
+    @staticmethod
+    def _parse_models(model: Union[str, List[str]]) -> List[str]:
+        """Accept a single model or a comma-separated priority list."""
+        if isinstance(model, str):
+            models = [m.strip() for m in model.split(",") if m.strip()]
+        else:
+            models = [m.strip() for m in model if m.strip()]
+        return models or ["gpt-4o-mini"]
+
     # ------------------------------------------------------------------
     # BaseLLMClient
     # ------------------------------------------------------------------
@@ -155,25 +164,25 @@ class OpenAICompatibleClient(BaseLLMClient):
     def chat(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gpt-4o-mini",
+        model: Union[str, List[str]] = "gpt-4o-mini",
         temperature: float = 0.7,
         max_tokens: int = 512,
         response_format: Optional[Dict[str, Any]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
-        payload: Dict[str, Any] = {
-            "model": model,
+        models = self._parse_models(model)
+        payload_base: Dict[str, Any] = {
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
         if response_format is not None:
-            payload["response_format"] = response_format
+            payload_base["response_format"] = response_format
 
         logger.debug(
-            "OpenAI-compat → base=%s  model=%r  messages=%d",
+            "OpenAI-compat → base=%s  models=%r  messages=%d",
             self._base_url,
-            model,
+            models,
             len(messages),
         )
 
@@ -188,90 +197,94 @@ class OpenAICompatibleClient(BaseLLMClient):
                 if cancel_check is not None and cancel_check():
                     raise CancelledError()
                 key = self._current_key
-                try:
-                    response = self._http.post(
-                        "/chat/completions",
-                        json=payload,
-                        headers={"Authorization": f"Bearer {key}"},
-                    )
-                except httpx.HTTPError as exc:
-                    if cancel_check is not None and cancel_check():
-                        raise CancelledError() from exc
-                    key_num = self._key_idx + 1
-                    logger.error(
-                        "OpenAI-compat request transport error on key #%d: %s — rotating to next key.",
-                        key_num,
-                        exc,
-                    )
-                    last_error = LLMError(0, f"Transport error: {exc}")
-                    self._rotate_key()
-                    continue
-
-                if response.status_code == 429:
+                for model_name in models:
+                    payload = dict(payload_base)
+                    payload["model"] = model_name
                     try:
-                        detail = response.json().get("error", {}).get("message", response.text)
-                    except Exception:
-                        detail = response.text
-                    key_num = self._key_idx + 1
-                    logger.warning(
-                        "API key #%d hit quota/rate-limit (429): %s — rotating to next key.",
-                        key_num,
-                        detail,
-                    )
-                    saw_quota_error = True
-                    last_error = LLMError(429, detail)
-                    self._rotate_key()
-                    continue
+                        response = self._http.post(
+                            "/chat/completions",
+                            json=payload,
+                            headers={"Authorization": f"Bearer {key}"},
+                        )
+                    except httpx.HTTPError as exc:
+                        if cancel_check is not None and cancel_check():
+                            raise CancelledError() from exc
+                        key_num = self._key_idx + 1
+                        logger.error(
+                            "OpenAI-compat transport error on key #%d model=%r: %s — trying next model/key.",
+                            key_num,
+                            model_name,
+                            exc,
+                        )
+                        last_error = LLMError(0, f"Transport error: {exc}")
+                        continue
 
-                if response.status_code != 200:
-                    try:
-                        body = response.json()
-                        detail = body.get("error", {}).get("message", response.text)
-                    except Exception:
-                        body = None
-                        detail = response.text
-                    request_id = (
-                        response.headers.get("x-request-id")
-                        or response.headers.get("x-openrouter-request-id")
-                    )
-                    raw_body = response.text or ""
-                    if len(raw_body) > _MAX_ERROR_BODY_CHARS:
-                        raw_body = raw_body[:_MAX_ERROR_BODY_CHARS] + "...(truncated)"
-                    logger.error(
-                        "OpenAI-compat request failed: status=%s base=%s model=%r key_index=%d request_id=%s detail=%s raw_body=%s parsed_body=%s",
-                        response.status_code,
-                        self._base_url,
-                        model,
+                    if response.status_code == 429:
+                        try:
+                            detail = response.json().get("error", {}).get("message", response.text)
+                        except Exception:
+                            detail = response.text
+                        key_num = self._key_idx + 1
+                        logger.warning(
+                            "API key #%d + model=%r hit quota/rate-limit (429): %s — trying next model in priority list.",
+                            key_num,
+                            model_name,
+                            detail,
+                        )
+                        saw_quota_error = True
+                        last_error = LLMError(429, detail)
+                        continue
+
+                    if response.status_code != 200:
+                        try:
+                            body = response.json()
+                            detail = body.get("error", {}).get("message", response.text)
+                        except Exception:
+                            body = None
+                            detail = response.text
+                        request_id = (
+                            response.headers.get("x-request-id")
+                            or response.headers.get("x-openrouter-request-id")
+                        )
+                        raw_body = response.text or ""
+                        if len(raw_body) > _MAX_ERROR_BODY_CHARS:
+                            raw_body = raw_body[:_MAX_ERROR_BODY_CHARS] + "...(truncated)"
+                        logger.error(
+                            "OpenAI-compat request failed: status=%s base=%s model=%r key_index=%d request_id=%s detail=%s raw_body=%s parsed_body=%s",
+                            response.status_code,
+                            self._base_url,
+                            model_name,
+                            self._key_idx + 1,
+                            request_id or "-",
+                            detail,
+                            raw_body,
+                            body,
+                        )
+                        last_error = LLMError(response.status_code, detail)
+                        continue
+
+                    body = response.json()
+                    if "choices" not in body or not body["choices"]:
+                        msg = body.get("error", {}).get("message", str(body))
+                        key_num = self._key_idx + 1
+                        logger.error(
+                            "OpenAI-compat malformed response on key #%d model=%r: missing choices: %s — trying next model/key.",
+                            key_num,
+                            model_name,
+                            msg,
+                        )
+                        last_error = LLMError(200, f"Response missing 'choices': {msg}")
+                        continue
+
+                    content: str = body["choices"][0]["message"]["content"]
+                    logger.debug(
+                        "OpenAI-compat ← key=#%d model=%r tokens_used=%s",
                         self._key_idx + 1,
-                        request_id or "-",
-                        detail,
-                        raw_body,
-                        body,
+                        model_name,
+                        body.get("usage", {}).get("total_tokens", "?"),
                     )
-                    last_error = LLMError(response.status_code, detail)
-                    self._rotate_key()
-                    continue
-
-                body = response.json()
-                if "choices" not in body or not body["choices"]:
-                    msg = body.get("error", {}).get("message", str(body))
-                    key_num = self._key_idx + 1
-                    logger.error(
-                        "OpenAI-compat malformed response on key #%d: missing choices: %s — rotating to next key.",
-                        key_num,
-                        msg,
-                    )
-                    last_error = LLMError(200, f"Response missing 'choices': {msg}")
-                    self._rotate_key()
-                    continue
-
-                content: str = body["choices"][0]["message"]["content"]
-                logger.debug(
-                    "OpenAI-compat ← key=#%d  tokens_used=%s",
-                    self._key_idx + 1,
-                    body.get("usage", {}).get("total_tokens", "?"),
-                )
-                return content
+                    return content
+                self._rotate_key()
 
             # All keys are exhausted this cycle.
             # Retry-with-wait only for quota/rate-limit cases.

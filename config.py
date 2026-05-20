@@ -75,7 +75,9 @@ class PipelineConfig(BaseModel):
     model: Optional[str] = Field(
         None,
         description=(
-            "Model identifier. Defaults: gemini=gemini-2.0-flash, "
+            "Model identifier, or a comma-separated priority list for "
+            "OpenAI-compatible clients (e.g. 'model_a,model_b,model_c'). "
+            "Defaults: gemini=gemini-2.0-flash, "
             "openrouter=deepseek/deepseek-chat-v3-0324:free, "
             "openai=llama-3.3-70b-versatile (Groq)."
         ),

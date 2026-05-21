@@ -32,23 +32,14 @@ who appears or participates in the story.
 Rules:
 - All descriptions MUST be in English.
 - If a character has a proper name, set "name" to that name and leave "role" null.
-- If a character has no name but has a clear role or group label \
-  (e.g. "office workers", "the interviewer", "the boss"), \
-  set "role" to that label and leave "name" null.
+- If a character has no name but has a clear role or group label (e.g. "office workers", "the interviewer", "the boss"), set "role" to that label and leave "name" null.
 - MUST READ THE PARAGRAPH CAREFULLY FOR RECOGNIZING THE CHARACTER'S GENDER
 - In case there's character's name, the role should be what the character is referred to as in the transcript.
-- For off-screen narrators who are never visually depicted, set \
-  "role": "narrator" and "description": "off-screen voice, no visual appearance".
-- For each entry give a detailed VISUAL description suitable for image generation in English: \
-  approximate age, body type, hairstyle/hair length, skin tone, clothing/uniform, \
-  accessories, facial features, and overall vibe.
-- If the transcript does not clearly specify some visual details, infer them \
-  plausibly from context and role. Favor attractive, eye-catching, cinematic \
-  character design (e.g. graceful posture, well-styled hair, confident presence), \
-  while remaining believable for the story.
-- Do not contradict explicit transcript facts. Inferred details must stay consistent \
-  with the character's role, setting, and tone.
-
+- For off-screen narrators who are never visually depicted, set "role": "narrator" and "description": "off-screen voice, no visual appearance".
+- **CRITICAL: NEVER create visual descriptions that directly copy or closely resemble real-life celebrities, actors, idols, or public figures. Always create original, fictional character designs even if the transcript mentions a famous name. Change hairstyle, facial features, clothing style, and overall look to make them unique while keeping the spirit/age/role.**
+- For each entry give a detailed VISUAL description suitable for image generation in English: approximate age, body type, hairstyle/hair length, skin tone, clothing/uniform, accessories, facial features, and overall vibe.
+- If the transcript does not clearly specify some visual details, infer them plausibly from context and role. Favor attractive, eye-catching, cinematic character design...
+- Do not contradict explicit transcript facts. Inferred details must stay consistent with the character's role, setting, and tone.
 Output ONLY a JSON object in exactly this format (no markdown, no extra keys):
 {
   "characters": [

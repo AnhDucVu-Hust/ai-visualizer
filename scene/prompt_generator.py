@@ -38,6 +38,8 @@ GLOBAL STYLE DIRECTIVE: Every image MUST be rendered in this visual style — \
 do not deviate:
   "{global_style}"
 
+ANTI-CELEBRITY SAFETY RULE: Always generate ORIGINAL fictional character designs. Never replicate or closely imitate the exact facial features, hairstyle, or likeness of any real-life actor. Even for iconic characters like Peter Parker or Spider-Man, create a unique, attractive cinematic version consistent with the transcript's description.
+
 {character_block}\
 Given a segment of transcribed audio, output ONLY a JSON object with exactly \
 these keys (no extra keys, no markdown, no explanation):
@@ -54,16 +56,19 @@ these keys (no extra keys, no markdown, no explanation):
 
 CHARACTER RULES for the "characters" field:
 {character_rules}
+- Use the fixed designs from CHARACTER ROSTER.
+- Always create original facial features and looks. Never imitate real actors.
+- Only include characters visible in the scene.
 
 General rules:
 - Each JSON value must be a single descriptive phrase (no nested objects).
 - The "style" field MUST always reflect "{global_style}".
 - Stay faithful to the transcript; do not invent unrelated elements.
-- If the transcript segment includes multiple beats, prioritize the first scene/event that appears when writing the "scene" field.
-- Write all values in English regardless of the source language.
-- No mentioning the word like celebrities, or a famous person in real life.
-- Don't mention any character that is not visible in the scene. Just describe who should be visible in the scene.
-- Output ONLY the JSON object — no markdown fences, no preamble. Make sure the JSON is valid and follows the format strictly. \
+- If the transcript segment includes multiple beats, prioritize the first scene/event.
+- Write all values in English.
+- Strictly no mentioning real celebrities or actors.
+- Don't mention any character that is not visible in the scene.
+- Output ONLY the JSON object — no markdown fences, no preamble. \
 """
 
 _CHARACTER_BLOCK_WITH_ROSTER = """\

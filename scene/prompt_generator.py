@@ -63,7 +63,7 @@ General rules:
 - Write all values in English regardless of the source language.
 - No mentioning the word like celebrities, or a famous person in real life.
 - Don't mention any character that is not visible in the scene. Just describe who should be visible in the scene.
-- Output ONLY the JSON object — no markdown fences, no preamble.\
+- Output ONLY the JSON object — no markdown fences, no preamble. Make sure the JSON is valid and follows the format strictly. \
 """
 
 _CHARACTER_BLOCK_WITH_ROSTER = """\
@@ -76,7 +76,7 @@ _CHARACTER_RULES_WITH_ROSTER = """\
 Build the value as an ordered list separated by " | ":
 
   1. MAIN characters (from the roster above) who appear in this scene:
-     Format → "Name - {<their roster description>, <pose/expression for THIS scene>}"
+     Format → "Name - <their roster description>, <pose/expression for THIS scene>"
      Use the roster description as the base, but adapt it to match the scene's
      context (e.g., older/younger, injured, wearing different era-appropriate
      clothing). Keep the same core identity and recognizable traits.

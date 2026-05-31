@@ -3,10 +3,10 @@
 # Docker Compose 2 container → deploy/nginx/nginx.docker.conf (proxy_pass app:8000).
 #
 # 1. Copy to /etc/nginx/sites-available/ai-visualizer
-# 2. Replace USER in alias if not "ubuntu"; set server_name
+# 2. Set server_name (alias mặc định /opt/ai-visualizer/temp/ — xem chú thích bên dưới)
 # 3. ln -s .../sites-enabled/
 # 4. .env: NGINX_ACCEL_ENABLED=1
-# 5. docker -v must match alias: $HOME/ai-visualizer/temp:/app/temp
+# 5. docker -v must match alias: /opt/ai-visualizer/temp:/app/temp
 # 6. nginx -t && systemctl reload nginx
 #
 # Guides: deploy/nginx/INSTALL.md | deploy/docker/README-dockerfile.md
@@ -24,11 +24,12 @@ server {
 
     client_max_body_size 3000m;
 
-    # Host path = repo ~/ai-visualizer/temp (same as docker -v ...:/app/temp)
-    # Replace "ubuntu" with: whoami
+    # Host path = TEMP_HOST_DIR (same as docker -v ...:/app/temp).
+    # Dùng /opt — KHÔNG để trong /root: nginx (www-data) không đọc được /root (700) → 403.
+    # Path phải có "/" cuối và trùng đúng volume Docker.
     location /internal-temp/ {
         internal;
-        alias /home/ubuntu/ai-visualizer/temp/;
+        alias /opt/ai-visualizer/temp/;
     }
 
     location ~ ^/api/jobs/[^/]+/artifact$ {

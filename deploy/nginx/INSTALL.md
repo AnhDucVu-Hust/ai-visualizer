@@ -4,7 +4,7 @@ Hướng dẫn deploy **AI Visualizer** trên VPS Ubuntu/Debian:
 
 - **FastAPI** chạy trong Docker (build từ `Dockerfile` ở thư mục gốc repo)
 - **Nginx** cài trực tiếp trên VPS (reverse proxy + tải video lớn)
-- Repo mặc định: **`~/ai-visualizer/`**
+- Repo mặc định: `**~/ai-visualizer/`**
 
 Không dùng `docker compose` cho flow này. File `nginx.docker.conf` chỉ dành cho compose 2 container.
 
@@ -17,14 +17,20 @@ Internet :80/:443
     ↓
 nginx (trên VPS)
     ├─ proxy_pass → 127.0.0.1:8000 → container Docker (FastAPI)
-    └─ X-Accel-Redirect → ~/ai-visualizer/temp/*.mp4 (sendfile)
+    └─ X-Accel-Redirect → /opt/ai-visualizer/temp/*.mp4 (sendfile)
 ```
 
-| Thành phần | Vị trí | Port |
-|------------|--------|------|
-| Nginx | Host VPS | 80, 443 |
-| Container `ai-visualizer` | Docker | `127.0.0.1:8000` (không mở ra internet) |
-| Video tạm | `~/ai-visualizer/temp/` trên host | mount → `/app/temp` trong container |
+
+| Thành phần                | Vị trí                              | Port                                    |
+| ------------------------- | ----------------------------------- | --------------------------------------- |
+| Nginx                     | Host VPS                            | 80, 443                                 |
+| Container `ai-visualizer` | Docker                              | `127.0.0.1:8000` (không mở ra internet) |
+| Video tạm                 | `/opt/ai-visualizer/temp/` trên host | mount → `/app/temp` trong container     |
+
+> **Quan trọng:** thư mục temp đặt ở `/opt/ai-visualizer/temp`, **không** để trong `/root`.
+> Nginx chạy bằng user `www-data`; `/root` có quyền `700` nên nginx không đọc được file →
+> tải video sẽ lỗi **403**. `/opt` mặc định `755` nên `www-data` đọc được.
+
 
 ---
 
@@ -59,7 +65,7 @@ UPLOAD_JOB_TTL_SECONDS=3600
 ```
 
 ```bash
-mkdir -p ~/ai-visualizer/temp
+sudo mkdir -p /opt/ai-visualizer/temp
 ```
 
 ---
@@ -86,12 +92,16 @@ cd ~/ai-visualizer
 bash deploy/docker/run.sh
 ```
 
-Script sẽ: build image, tạo `~/ai-visualizer/temp`, chạy container với volume và `NGINX_ACCEL_ENABLED=1`.
+Script sẽ: build image, tạo `/opt/ai-visualizer/temp`, chạy container với volume và `NGINX_ACCEL_ENABLED=1`.
+
+Đổi thư mục temp (nếu cần): `TEMP_HOST_DIR=/path/khac bash deploy/docker/run.sh` — nhớ sửa `alias` nginx cho khớp.
 
 ### Cách B — Lệnh tay
 
 ```bash
 cd ~/ai-visualizer
+
+sudo mkdir -p /opt/ai-visualizer/temp
 
 docker rm -f ai-visualizer 2>/dev/null || true
 
@@ -101,18 +111,20 @@ docker run -d \
   --env-file .env \
   -e NGINX_ACCEL_ENABLED=1 \
   -p 127.0.0.1:8000:8000 \
-  -v "$HOME/ai-visualizer/temp:/app/temp" \
+  -v "/opt/ai-visualizer/temp:/app/temp" \
   ai-visualizer
 ```
 
 **Giải thích flags:**
 
-| Flag | Ý nghĩa |
-|------|---------|
-| `-p 127.0.0.1:8000:8000` | Chỉ localhost VPS gọi được (nginx proxy vào đây) |
-| `-v .../temp:/app/temp` | Video MP4 trên host để nginx đọc khi tải lớn |
-| `-e NGINX_ACCEL_ENABLED=1` | App trả `X-Accel-Redirect` thay vì stream qua Python |
-| `--restart unless-stopped` | Tự chạy lại khi reboot VPS |
+
+| Flag                                | Ý nghĩa                                              |
+| ----------------------------------- | ---------------------------------------------------- |
+| `-p 127.0.0.1:8000:8000`            | Chỉ localhost VPS gọi được (nginx proxy vào đây)     |
+| `-v /opt/ai-visualizer/temp:/app/temp` | Video MP4 trên host để nginx đọc khi tải lớn (ngoài `/root` để tránh 403) |
+| `-e NGINX_ACCEL_ENABLED=1`          | App trả `X-Accel-Redirect` thay vì stream qua Python |
+| `--restart unless-stopped`          | Tự chạy lại khi reboot VPS                           |
+
 
 ### Kiểm tra app (chưa qua nginx)
 
@@ -154,21 +166,17 @@ sudo nano /etc/nginx/sites-available/ai-visualizer
 
 **Bắt buộc kiểm tra:**
 
-1. **`alias`** trong `location /internal-temp/` — phải trùng `$HOME/ai-visualizer/temp/`:
-
-   ```nginx
-   alias /home/ubuntu/ai-visualizer/temp/;
-   ```
-
-   Thay `ubuntu` bằng user SSH (`whoami`). Path tuyệt đối phải khớp volume Docker.
-
-2. **`server_name`** — domain hoặc `_` (chấp nhận mọi host / test bằng IP):
-
-   ```nginx
+1. `alias` trong `location /internal-temp/` — phải trùng path volume Docker (mặc định `/opt/ai-visualizer/temp/`):
+  ```nginx
+   alias /opt/ai-visualizer/temp/;
+  ```
+   Có `/` cuối. **Không** đặt temp trong `/root` (nginx `www-data` không đọc được → lỗi 403).
+2. `**server_name**` — domain hoặc `_` (chấp nhận mọi host / test bằng IP):
+  ```nginx
    server_name studio.example.com;
-   ```
+  ```
 
-**`proxy_pass`:** config dùng `upstream ai_visualizer_app { server 127.0.0.1:8000; }` — tương đương proxy thẳng tới container.
+`**proxy_pass`:** config dùng `upstream ai_visualizer_app { server 127.0.0.1:8000; }` — tương đương proxy thẳng tới container.
 
 ### 5.3 Bật site
 
@@ -227,7 +235,7 @@ docker run -d \
   --env-file .env \
   -e NGINX_ACCEL_ENABLED=1 \
   -p 127.0.0.1:8000:8000 \
-  -v "$HOME/ai-visualizer/temp:/app/temp" \
+  -v "/opt/ai-visualizer/temp:/app/temp" \
   ai-visualizer
 ```
 
@@ -241,23 +249,26 @@ Hoặc: `bash deploy/docker/run.sh`
 
 Base URL: `http://IP` hoặc `https://domain` (không dùng `:8000` từ ngoài).
 
-| Endpoint | Mục đích |
-|----------|----------|
-| `GET /api/health` | Kiểm tra sống |
-| `POST /api/video/ffmpeg/jobs/upload` | Render video (cloud) |
-| `GET /api/jobs/{id}` | Poll trạng thái job |
+
+| Endpoint                                     | Mục đích                    |
+| -------------------------------------------- | --------------------------- |
+| `GET /api/health`                            | Kiểm tra sống               |
+| `POST /api/video/ffmpeg/jobs/upload`         | Render video (cloud)        |
+| `GET /api/jobs/{id}`                         | Poll trạng thái job         |
 | `GET /api/jobs/{id}/artifact?client_key=...` | Tải MP4 (sau `stage: done`) |
+
 
 ---
 
 ## Checklist hoàn tất
 
-- [ ] `curl http://127.0.0.1:8000/api/health` → OK
-- [ ] `curl http://IP/api/health` → OK
-- [ ] `alias` nginx = `$HOME/ai-visualizer/temp/` (có `/` cuối)
-- [ ] Docker `-v` trùng path `temp`
-- [ ] `.env` có `NGINX_ACCEL_ENABLED=1`
-- [ ] `docker ps` → `ai-visualizer` Up
+- `curl http://127.0.0.1:8000/api/health` → OK
+- `curl http://IP/api/health` → OK
+- `alias` nginx = `/opt/ai-visualizer/temp/` (có `/` cuối)
+- Docker `-v` trùng path `temp` (`/opt/ai-visualizer/temp:/app/temp`)
+- temp **không** nằm trong `/root` (tránh 403)
+- `.env` có `NGINX_ACCEL_ENABLED=1`
+- `docker ps` → `ai-visualizer` Up
 
 ---
 
@@ -266,34 +277,55 @@ Base URL: `http://IP` hoặc `https://domain` (không dùng `:8000` từ ngoài)
 Sau job video xong:
 
 ```bash
-ls ~/ai-visualizer/temp/video/
-docker exec ai-visualizer ls /app/temp/video/
+ls /opt/ai-visualizer/temp/
+docker exec ai-visualizer ls /app/temp/
+
+# Quyền đọc của nginx (www-data) — phải KHÔNG báo "Permission denied"
+sudo -u www-data ls /opt/ai-visualizer/temp/ && echo "www-data OK"
 ```
 
-Hai lệnh phải thấy **cùng file**. Nếu host trống → thiếu `-v` khi `docker run`.
+Hai lệnh đầu phải thấy **cùng file**. Nếu host trống → thiếu `-v` khi `docker run`.
+Nếu lệnh `www-data` báo `Permission denied` → temp đang nằm chỗ nginx không đọc được (vd `/root`) → sẽ lỗi 403.
 
 ---
 
 ## Lỗi thường gặp
 
-| Triệu chứng | Nguyên nhân | Xử lý |
-|-------------|-------------|--------|
-| 502 Bad Gateway | Container không chạy | `docker ps`, `docker logs ai-visualizer` |
-| API OK, tải video lỗi | `alias` ≠ volume `temp` | Sửa nginx + `docker run -v` |
-| 404 artifact | Job chưa `done` hoặc file đã bị TTL xóa | Poll job; tăng `VIDEO_JOB_TTL_SECONDS` |
-| Tải lỗi + `NGINX_ACCEL_ENABLED=1` | Nginx chưa có `/internal-temp/` | Làm lại bước 5 |
+
+| Triệu chứng                       | Nguyên nhân                             | Xử lý                                    |
+| --------------------------------- | --------------------------------------- | ---------------------------------------- |
+| 502 Bad Gateway                   | Container không chạy                    | `docker ps`, `docker logs ai-visualizer` |
+| **403 khi tải video**             | nginx (`www-data`) không đọc được file — thường do temp nằm trong `/root` (quyền 700) | Chuyển temp sang `/opt/ai-visualizer/temp` (xem dưới) |
+| API OK, tải video lỗi (404)       | `alias` ≠ volume `temp`                 | Sửa nginx + `docker run -v`              |
+| 404 artifact                      | Job chưa `done` hoặc file đã bị TTL xóa | Poll job; tăng `VIDEO_JOB_TTL_SECONDS`   |
+| Tải lỗi + `NGINX_ACCEL_ENABLED=1` | Nginx chưa có `/internal-temp/`         | Làm lại bước 5                           |
+
+**Khắc phục lỗi 403 (temp đang ở `/root`):**
+
+```bash
+sudo mkdir -p /opt/ai-visualizer/temp
+cd ~/ai-visualizer
+TEMP_HOST_DIR=/opt/ai-visualizer/temp bash deploy/docker/run.sh
+sudo sed -i 's#/root/ai-visualizer/temp/#/opt/ai-visualizer/temp/#' /etc/nginx/sites-available/ai-visualizer
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Job đã render trước đó (ở `/root/...`) phải combine lại để file mới sinh trong `/opt`.
+
 
 ---
 
 ## File liên quan
 
-| File | Mục đích |
-|------|----------|
-| `Dockerfile` | Build image backend |
-| `deploy/docker/run.sh` | Build + run container |
-| `deploy/nginx/ai-visualizer.conf.example` | Config nginx host (copy sang `/etc/nginx/...`) |
-| `deploy/nginx/nginx.docker.conf` | Chỉ dùng với `docker-compose.yml` (không dùng ở đây) |
-| `.env.example` | Biến môi trường mẫu |
+
+| File                                      | Mục đích                                             |
+| ----------------------------------------- | ---------------------------------------------------- |
+| `Dockerfile`                              | Build image backend                                  |
+| `deploy/docker/run.sh`                    | Build + run container                                |
+| `deploy/nginx/ai-visualizer.conf.example` | Config nginx host (copy sang `/etc/nginx/...`)       |
+| `deploy/nginx/nginx.docker.conf`          | Chỉ dùng với `docker-compose.yml` (không dùng ở đây) |
+| `.env.example`                            | Biến môi trường mẫu                                  |
+
 
 ---
 

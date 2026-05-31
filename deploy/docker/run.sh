@@ -14,8 +14,10 @@ cd "$ROOT"
 
 IMAGE_NAME="${IMAGE_NAME:-ai-visualizer}"
 CONTAINER_NAME="${CONTAINER_NAME:-ai-visualizer}"
-# Thư mục trên HOST — nginx alias phải trỏ đúng path này (X-Accel-Redirect)
-TEMP_HOST_DIR="${TEMP_HOST_DIR:-${HOME}/ai-visualizer/temp}"
+# Thư mục trên HOST — nginx alias phải trỏ đúng path này (X-Accel-Redirect).
+# Dùng /opt (KHÔNG để trong /root): nginx chạy bằng www-data, không traverse được
+# /root (quyền 700) → tải file sẽ lỗi 403. /opt mặc định 755 nên www-data đọc được.
+TEMP_HOST_DIR="${TEMP_HOST_DIR:-/opt/ai-visualizer/temp}"
 
 mkdir -p "$TEMP_HOST_DIR"
 
@@ -39,5 +41,5 @@ docker run -d \
 
 echo "Container $CONTAINER_NAME listening on 127.0.0.1:8000"
 echo "temp volume: $TEMP_HOST_DIR -> /app/temp"
-echo "Configure host nginx: alias ${TEMP_HOST_DIR}/ in location /internal-temp/"
+echo "Configure host nginx: alias ${TEMP_HOST_DIR}/ in location /internal-temp/ (must end with /)"
 echo "Health: curl -s http://127.0.0.1:8000/api/health"

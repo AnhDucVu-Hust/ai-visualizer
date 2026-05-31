@@ -75,6 +75,19 @@ def _resolve_path(p: str | None) -> Optional[Path]:
     return path
 
 
+def _make_temp_dir(prefix: str) -> Path:
+    """Create a per-job temp dir under ``_TEMP_ROOT`` that nginx can traverse.
+
+    ``tempfile.mkdtemp`` defaults to mode ``0o700`` (owner-only). When files are
+    served via ``X-Accel-Redirect``, nginx (user ``www-data``) must traverse this
+    directory to read the artifact; ``0o700`` blocks it → HTTP 403. Loosen to
+    ``0o755`` so the file is reachable.
+    """
+    path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(_TEMP_ROOT)))
+    os.chmod(path, 0o755)
+    return path
+
+
 def _job_payload(job) -> Dict[str, Any]:
     return job.to_dict()
 
@@ -116,7 +129,7 @@ def _build_prompts_bundle(job_id: str, result: Dict[str, Any]) -> Path:
     if not transcription_path or not transcription_path.is_file():
         raise HTTPException(status_code=404, detail="out.json not found for this prompts job.")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"prompts_bundle_{job_id}_", dir=str(_TEMP_ROOT)))
+    temp_dir = _make_temp_dir(f"prompts_bundle_{job_id}_")
     bundle_path = temp_dir / "prompts_bundle.zip"
     with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(scenes_path, arcname="scenes.json")
@@ -412,7 +425,7 @@ def _extract_scene_bundle(scene_bundle: UploadFile) -> Path:
     if not scene_bundle.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="scene_bundle must be a .zip file.")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="scene_bundle_", dir=str(_TEMP_ROOT)))
+    temp_root = _make_temp_dir("scene_bundle_")
     archive_path = temp_root / "scene_bundle.zip"
     extract_dir = temp_root / "scene"
 
@@ -432,7 +445,7 @@ def _extract_scene_files(scene_files: List[UploadFile]) -> Path:
     if not scene_files:
         raise HTTPException(status_code=400, detail="scene_files is required.")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="scene_folder_", dir=str(_TEMP_ROOT)))
+    temp_root = _make_temp_dir("scene_folder_")
     extract_dir = temp_root / "scene"
     extract_dir.mkdir(parents=True, exist_ok=True)
 

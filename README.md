@@ -71,6 +71,35 @@ If you run `npm run build` inside `frontend/`, the backend will serve the
 static bundle from `frontend/dist/` at the same port as the API, so you only
 need to run `python run_app.py` and visit http://127.0.0.1:8000/.
 
+## Deploy on a VPS (nginx for large video downloads)
+
+For **500MB+** MP4s, put **nginx** in front of uvicorn so downloads use
+`X-Accel-Redirect` (kernel `sendfile`) instead of streaming through Python.
+
+**Full guide (Docker + nginx on VPS):** **[deploy/nginx/INSTALL.md](deploy/nginx/INSTALL.md)**
+
+Quick start:
+
+1. `docker build -t ai-visualizer .` && `bash deploy/docker/run.sh`
+2. Copy `deploy/nginx/ai-visualizer.conf.example` → `/etc/nginx/sites-available/`
+3. Set `alias` to `$HOME/ai-visualizer/temp/` and reload nginx
+
+### Docker on VPS (Dockerfile only)
+
+```bash
+cp .env.example .env
+docker build -t ai-visualizer .
+bash deploy/docker/run.sh   # hoặc xem lệnh docker run trong README
+```
+
+Nginx cài **trên VPS** (không trong container), `proxy_pass` → `127.0.0.1:8000`.
+
+**[deploy/nginx/INSTALL.md](deploy/nginx/INSTALL.md)**
+
+### Docker Compose (optional, nginx in Docker)
+
+`docker compose up -d --build` — **[deploy/docker/README.md](deploy/docker/README.md)**
+
 ## Deploy backend free on Render
 
 This repo includes:

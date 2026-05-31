@@ -31,7 +31,10 @@ COPY video_combine_config.yaml /app/video_combine_config.yaml
 
 EXPOSE 8000
 
-# PORT is set by Render; run_app.py reads os.environ["PORT"]
+# VPS (Dockerfile only): publish 127.0.0.1:8000 + mount temp, nginx on host →
+#   deploy/nginx/INSTALL.md
+# Docker Compose (optional): docker-compose.yml + nginx.docker.conf
+# Render: PORT env; run_app.py reads os.environ["PORT"]
 CMD ["python", "run_app.py", "--host", "0.0.0.0"]
 
 

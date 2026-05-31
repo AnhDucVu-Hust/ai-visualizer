@@ -1,0 +1,57 @@
+# Nginx cài TRÊN HOST — app trong Docker (publish 127.0.0.1:8000) hoặc python trực tiếp.
+#
+# Docker Compose 2 container → deploy/nginx/nginx.docker.conf (proxy_pass app:8000).
+#
+# 1. Copy to /etc/nginx/sites-available/ai-visualizer
+# 2. Replace USER in alias if not "ubuntu"; set server_name
+# 3. ln -s .../sites-enabled/
+# 4. .env: NGINX_ACCEL_ENABLED=1
+# 5. docker -v must match alias: $HOME/ai-visualizer/temp:/app/temp
+# 6. nginx -t && systemctl reload nginx
+#
+# Guides: deploy/nginx/INSTALL.md | deploy/docker/README-dockerfile.md
+
+upstream ai_visualizer_app {
+    server 127.0.0.1:8000;
+    keepalive 8;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    # listen 443 ssl http2;
+    server_name _;
+
+    client_max_body_size 3000m;
+
+    # Host path = repo ~/ai-visualizer/temp (same as docker -v ...:/app/temp)
+    # Replace "ubuntu" with: whoami
+    location /internal-temp/ {
+        internal;
+        alias /home/ubuntu/ai-visualizer/temp/;
+    }
+
+    location ~ ^/api/jobs/[^/]+/artifact$ {
+        proxy_pass http://ai_visualizer_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        proxy_pass http://ai_visualizer_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}

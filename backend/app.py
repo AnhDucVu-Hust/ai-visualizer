@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .file_delivery import build_file_download_response
 from .jobs import registry
 from .keys_store import activate_key, verify_key
 from .prompts_pipeline import run_prompts_pipeline, scenes_info
@@ -56,7 +57,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "Content-Length"],
 )
 
 
@@ -1129,7 +1130,7 @@ def download_job_artifact(
     job_id: str,
     background_tasks: BackgroundTasks,
     client_key: Optional[str] = Query(default=None),
-) -> FileResponse:
+):
     job = registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown job id")
@@ -1147,15 +1148,21 @@ def download_job_artifact(
         download_name = p.name
         if payload.get("kind") in {"video", "video_ffmpeg"}:
             download_name = f"{job_id}.mp4"
-        return FileResponse(path=str(p), filename=download_name, media_type="video/mp4")
+        return build_file_download_response(
+            p,
+            download_name=download_name,
+            media_type="video/mp4",
+            temp_root=_TEMP_ROOT,
+        )
 
     if payload.get("kind") == "prompts":
         bundle_path = _build_prompts_bundle(job_id, result)
         background_tasks.add_task(shutil.rmtree, str(bundle_path.parent), True)
-        return FileResponse(
-            path=str(bundle_path),
-            filename=f"prompts_{job_id}.zip",
+        return build_file_download_response(
+            bundle_path,
+            download_name=f"prompts_{job_id}.zip",
             media_type="application/zip",
+            temp_root=_TEMP_ROOT,
         )
 
     raise HTTPException(status_code=404, detail="No output artifact for this job.")
